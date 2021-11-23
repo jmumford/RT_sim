@@ -70,7 +70,7 @@ def make_regressors_one_trial_type(n_trials, scan_length,
     # - this assumes sigma_subject and sigma_trial are equal, probably wrong
     # - because samples may sometimes fall outside of min/max, we generate
     # twice as many as we need, filter for min/max, and then take the number
-    # we actually need
+    # we actually need   
     shape_expnorm = 1 / (sigma_expnorm * lam_expnorm)
     subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
                                                 sigma_expnorm, 1) - \
