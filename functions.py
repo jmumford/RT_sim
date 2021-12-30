@@ -9,6 +9,8 @@ from pathlib import Path
 import seaborn as sns
 import pandas as pd
 from collections import defaultdict
+import time
+
 
 def make_3column_onsets(onsets, durations, amplitudes):
     """Utility function to generate 3 column onset structure
@@ -20,7 +22,7 @@ def make_regressors_one_trial_type(n_trials, scan_length,
                                    repetition_time=1, mu_expnorm=600,
                                    lam_expnorm=1 / 100, sigma_expnorm=75,
                                    max_rt=2000, min_rt=0, event_duration=2, 
-                                   ISI_min=2, ISI_max = 5, center_rt=True):
+                                   ISI_min=2, ISI_max=5, center_rt=True):
     """Generate regressors for one trial type samping response times from
     ex-Gaussian distribution.  7 regressors, total, are generated based on
     different popular modeling options used for trials that vary in duration by
@@ -75,7 +77,6 @@ def make_regressors_one_trial_type(n_trials, scan_length,
     subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
                                                 sigma_expnorm, 1) - \
                                                 1 / lam_expnorm
-    #subject_specific_mu_expnorm = mu_expnorm
     sim_num_trials = 0
     while sim_num_trials < n_trials:
         rt_trials_twice_what_needed = exponnorm.rvs(shape_expnorm,
@@ -87,10 +88,10 @@ def make_regressors_one_trial_type(n_trials, scan_length,
         sim_num_trials = rt_trials_filtered.shape[0]
     rt_trials = rt_trials_filtered[:n_trials] / 1000
     rt_trial_mean_s = np.mean(rt_trials)
-    ISI = np.random.uniform(low = ISI_min, high = ISI_max, size = n_trials - 1)
+    ISI = np.random.uniform(low=ISI_min, high=ISI_max, size=n_trials - 1)
     onsets = np.cumsum(np.append([5], rt_trials[0:(n_trials-1)]+ISI))
     frame_times = np.arange(0, scan_length*repetition_time, repetition_time)
-    if center_rt == True:
+    if center_rt:
         amplitudes = {'modulated': (rt_trials - rt_trial_mean_s),
                       'unmodulated': np.ones(onsets.shape)}
     else:
@@ -114,25 +115,19 @@ def make_regressors_one_trial_type(n_trials, scan_length,
                 non_orth_dur_rt, _ = hemodynamic_models.compute_regressor(
                       onsets_3col, 'spm', frame_times, oversampling=16)
                 contrasts = np.array([[1]])
-                dur_stim_unmod = regressors['fixed_event_duration']['unmodulated']
+                dur_stim_unmod = \
+                    regressors['fixed_event_duration']['unmodulated']
                 _, _, _, predy, _, _ = runreg(non_orth_dur_rt, 
                                     dur_stim_unmod, 
                                     contrasts, hp_filter=False, 
                                     compute_stats=False)
-                regressors[duration_type][modulation_type] = non_orth_dur_rt - predy 
-                # Alternative way (that kills power)
-                #onsets_3col = make_3column_onsets(onsets + event_duration, 
-                #                                  duration - event_duration, amplitude)
-                #
-                #regressors[duration_type][modulation_type], _ = \
-                #      hemodynamic_models.compute_regressor(
-                #      onsets_3col, 'spm', frame_times, oversampling=16)
+                regressors[duration_type][modulation_type] = \
+                                    non_orth_dur_rt - predy 
             else:
                 onsets_3col = make_3column_onsets(onsets, duration, amplitude)
                 regressors[duration_type][modulation_type], _ = \
                       hemodynamic_models.compute_regressor(
                       onsets_3col, 'spm', frame_times, oversampling=16)
-
     return regressors, rt_trial_mean_s
 
 
@@ -164,8 +159,8 @@ def runreg(y, x, contrasts, hp_filter=True, compute_stats=True):
         x = np.concatenate((x, dct_basis), axis = 1)
         n_contrasts = contrasts.shape[0]
         n_basis = dct_basis.shape[1]
-        contrasts = np.concatenate((contrasts, np.zeros((n_contrasts, n_basis))),
-                                    axis = 1)
+        contrasts = np.concatenate((contrasts, np.zeros((n_contrasts, 
+                                   n_basis))),axis = 1)
 
     if hp_filter == False:
         n_basis = 0
@@ -194,65 +189,100 @@ def runreg(y, x, contrasts, hp_filter=True, compute_stats=True):
         np.array(con_p).flatten(), pred_y, n_basis, r_squared 
 
 
-def calc_cor_over_noise_range(nsim, n_trials, scan_length, repetition_time=1, mu_expnorm=600,
+def calc_cor_over_noise_range(nsim, n_trials, scan_length, repetition_time=1, 
+              mu_expnorm=600,
               lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max = 5, win_sub_noise_sd_range = .1, center_rt=True,
+              min_rt=0, event_duration=2, ISI_min=2, ISI_max = 5, 
+              win_sub_noise_sd_range_scales_yes = .1, 
+              win_sub_noise_sd_range_scales_no = .1, center_rt=True,
               beta_scales_yes = 1, beta_scales_no = 1):
-    cor_est_scales_no_filt = []
-    #cor_est_unfilt = []
-    cor_est_scales_yes_filt = []
-    for win_sub_noise_sd_loop in win_sub_noise_sd_range:
-        #print(win_sub_noise_sd_loop)
-        eff_size_out = sim_avg_eff_size(nsim, n_trials, scan_length, repetition_time, mu_expnorm,
+    if len(win_sub_noise_sd_range_scales_yes) != \
+                         len(win_sub_noise_sd_range_scales_no):
+        print("win_sub_noise_sd_range_scales_yes/no must have same lengths")
+        return
+    cor_est_scales_no_filt_yes = []
+    cor_est_scales_yes_filt_yes = []
+    cor_est_scales_no_filt_yes_sd = []
+    cor_est_scales_yes_filt_yes_sd = []
+    num_sd = len(win_sub_noise_sd_range_scales_yes)
+    for sd_ind in range(0, num_sd):
+        eff_size_out = sim_avg_eff_size(nsim, n_trials, scan_length, 
+              repetition_time, mu_expnorm,
               lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd_loop, center_rt,
+              min_rt, event_duration, ISI_min, ISI_max, 
+              win_sub_noise_sd_range_scales_yes[sd_ind], 
+              win_sub_noise_sd_range_scales_no[sd_ind], center_rt,
               beta_scales_yes, beta_scales_no)
-        cor_est_scales_yes_filt.append(eff_size_out['sim_effect_scales_yes_hp_filt'])
-        cor_est_scales_no_filt.append(eff_size_out['sim_effect_scales_no_hp_filt'])
-    output = {'cor_est_scales_yes_filt': cor_est_scales_yes_filt, 
-               'cor_est_scales_no_filt': cor_est_scales_no_filt}
+        cor_est_scales_yes_filt_yes.append(
+                        eff_size_out['sim_effect_scales_yes_hp_filt_yes'])
+        cor_est_scales_no_filt_yes.append(
+                        eff_size_out['sim_effect_scales_no_hp_filt_yes'])
+        cor_est_scales_yes_filt_yes_sd.append(
+                        eff_size_out['sim_effect_scales_yes_hp_filt_yes_sd'])
+        cor_est_scales_no_filt_yes_sd.append(
+                        eff_size_out['sim_effect_scales_no_hp_filt_yes_sd'])
+    output = {'cor_est_scales_yes_filt_yes': cor_est_scales_yes_filt_yes, 
+               'cor_est_scales_no_filt_yes': cor_est_scales_no_filt_yes,
+               'cor_est_scales_yes_filt_yes_sd': cor_est_scales_yes_filt_yes_sd, 
+               'cor_est_scales_no_filt_yes_sd': cor_est_scales_no_filt_yes_sd}
     return output
 
 
 
-def sim_avg_eff_size(nsim, n_trials, scan_length, repetition_time=1, mu_expnorm=600,
+def sim_avg_eff_size(nsim, n_trials, scan_length, repetition_time=1, 
+               mu_expnorm=600,
               lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max = 5, win_sub_noise_sd=0.1, center_rt=True,
+              min_rt=0, event_duration=2, ISI_min=2, ISI_max = 5, 
+              win_sub_noise_sd_scales_yes=0.1, 
+              win_sub_noise_sd_scales_no=0.1, center_rt=True,
               beta_scales_yes = 1, beta_scales_no = 1):
     """STUFF
     """
-    eff_size_scales_yes_filt_no_sim = []
     eff_size_scales_yes_filt_yes_sim = []
     eff_size_scales_no_filt_yes_sim = []
-    eff_size_scales_yes_filt_yes_sim = []
-
+    
     for sim in range(0, nsim):
         regressors, _ = make_regressors_one_trial_type(n_trials, scan_length, 
                                    repetition_time, mu_expnorm, 
                                    lam_expnorm, sigma_expnorm,
-                                   max_rt, min_rt, event_duration, ISI_min, ISI_max, center_rt)
+                                   max_rt, min_rt, event_duration, ISI_min, 
+                                   ISI_max, center_rt)
         dv_scales_yes = beta_scales_yes*regressors['rt']['unmodulated'] + \
-                     np.random.normal(0, win_sub_noise_sd, (scan_length, 1))
+                     np.random.normal(0, win_sub_noise_sd_scales_yes, 
+                                      (scan_length, 1))
         dv_scales_no = beta_scales_no*regressors['fixed_zero']['unmodulated']+ \
-                     np.random.normal(0, win_sub_noise_sd, (scan_length, 1))                              
-        eff_size_dv_scales_yes_filtered_no = np.corrcoef(regressors['rt']['unmodulated'].T, dv_scales_yes.T)[1,0]
-        eff_size_dv_scales_no_filtered_no = np.corrcoef(regressors['fixed_zero']['unmodulated'].T, dv_scales_no.T)[1,0]
+                     np.random.normal(0, win_sub_noise_sd_scales_no, 
+                                      (scan_length, 1))                              
         x_duration_rt_only = np.concatenate((np.ones(dv_scales_yes.shape),
                     regressors['rt']['unmodulated']), axis=1)
         contrasts = np.array([[0, 1]])
-        _, t_dv_scales_yes, _, _, n_basis, _ = runreg(dv_scales_yes, x_duration_rt_only, contrasts, hp_filter=True, compute_stats=True)
-        eff_size_dv_scales_yes_filtered = t_dv_scales_yes/(scan_length - (2 + n_basis) + t_dv_scales_yes ** 2) ** .5
+        _, t_dv_scales_yes, _, _, n_basis, _ = runreg(dv_scales_yes, 
+                                         x_duration_rt_only, contrasts, 
+                                         hp_filter=True, compute_stats=True)
+        eff_size_dv_scales_yes_filtered = \
+            t_dv_scales_yes/(scan_length - 
+                                   (2 + n_basis) + t_dv_scales_yes ** 2) ** .5
         eff_size_scales_yes_filt_yes_sim.append(eff_size_dv_scales_yes_filtered)
+
         x_cons_dur_only = np.concatenate((np.ones(dv_scales_yes.shape),
                     regressors['fixed_zero']['unmodulated']), axis=1)
-        _, t_dv_scales_no, _, _, n_basis, _ = runreg(dv_scales_no, x_cons_dur_only, contrasts, hp_filter=True, compute_stats=True)
-        eff_size_dv_scales_no_filtered = t_dv_scales_no/(scan_length - (2 + n_basis) + t_dv_scales_no ** 2) ** .5
+        _, t_dv_scales_no, _, _, n_basis, _ = runreg(dv_scales_no, 
+                                        x_cons_dur_only, contrasts,
+                                        hp_filter=True, compute_stats=True)
+        eff_size_dv_scales_no_filtered = \
+            t_dv_scales_no/(scan_length - (2 + n_basis) + t_dv_scales_no ** 2) ** .5
         eff_size_scales_no_filt_yes_sim.append(eff_size_dv_scales_no_filtered)
-        output = {'sim_effect_scales_yes_hp_filt' : np.mean(eff_size_scales_yes_filt_yes_sim),
-                  'sim_effect_scales_no_hp_filt' : np.mean(eff_size_scales_no_filt_yes_sim)}
+        output = {'sim_effect_scales_yes_hp_filt_yes' : 
+                        np.mean(eff_size_scales_yes_filt_yes_sim),
+                  'sim_effect_scales_no_hp_filt_yes' : 
+                        np.mean(eff_size_scales_no_filt_yes_sim),
+                  'sim_effect_scales_yes_hp_filt_yes_sd' : 
+                        np.std(eff_size_scales_yes_filt_yes_sim),
+                  'sim_effect_scales_no_hp_filt_yes_sd' : 
+                        np.std(eff_size_scales_no_filt_yes_sim)}
     return  output
 
-def make_empty_dict_model_keys():
+def make_empty_dict_model_keys(numrep):
     models = {'Impulse Duration',
               'Fixed/RT Duration (orth)',
               'Stimulus Duration',
@@ -261,45 +291,64 @@ def make_empty_dict_model_keys():
               'No RT effect'}
     dependent_variables = {'dv_scales_yes',
             'dv_scales_no'}
-    empty_model_dict = {key: {key2: [] for key2 in models} for key in 
+    empty_model_dict = {key: {key2: [None]*numrep for key2 in models} for key in 
         dependent_variables}
     return empty_model_dict
+
+def make_design_matrices(regressors):
+    """
+    Input: regressor output from make_regressors_one_trial_type
+    Output: Design matrices for models of interest in simulations
+    """
+    regressor_shape = regressors['fixed_zero']['unmodulated'].shape
+    x_duration_0 = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_zero']['unmodulated'],
+                    regressors['fixed_zero']['modulated']), axis=1)
+    x_duration_event_duration = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_event_duration']['unmodulated'],
+                    regressors['fixed_event_duration']['modulated']), axis=1)
+    x_duration_mean_rt = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_mean_rt']['unmodulated'],
+                    regressors['fixed_mean_rt']['modulated']), axis=1)
+    x_duration_rt_only = np.concatenate((np.ones(regressor_shape),
+                    regressors['rt']['unmodulated']), axis=1)
+    x_duration_event_only = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_event_duration']['unmodulated']), axis=1)
+    x_duration_event_duration_rt_orth = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_event_duration']['unmodulated'],
+                    regressors['rt_orth']['unmodulated']), axis=1)
+    
+    models = {'Impulse Duration': x_duration_0,
+              'Fixed/RT Duration (orth)': x_duration_event_duration_rt_orth,
+              'Stimulus Duration': x_duration_event_duration,
+              'Mean RT Duration': x_duration_mean_rt,
+              'RT Duration only': x_duration_rt_only,
+              'No RT effect': x_duration_event_only}
+    return models
 
 def est_win_sub_mod_sd(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
               lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
               min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, center_rt=True,
               hp_filter=True, nsim=100):
+    """
+    Function used to estimate the first level SD contribution from the design
+      matrix, *only*.  Used along with within-subject sd to assess overall 
+      level 1 variance estimate and ratio to mixed effects variance to 
+      total within-subject variance when choosing simulation settings
+    Input: RT and other settings for design matrix contstruciton
+    Output: The square root of the diagonal element of inv(X'X) that corresponds
+            to the RT-duration only model and Impulse duration only model,
+            potentially accounting for highpass filtering.
+    """
     rt_dur_des_sd = []
     zero_dur_des_sd = []
     for i in range(0, nsim):
         regressors, _ = make_regressors_one_trial_type(n_trials, scan_length, 
                                    repetition_time, mu_expnorm, 
                                    lam_expnorm, sigma_expnorm,
-                                   max_rt, min_rt, event_duration, ISI_min, ISI_max, center_rt)
-        reg_shape = (scan_length, 1)
-        x_duration_0 = np.concatenate((np.ones(reg_shape),
-                    regressors['fixed_zero']['unmodulated'],
-                    regressors['fixed_zero']['modulated']), axis=1)
-        x_duration_event_duration = np.concatenate((np.ones(reg_shape),
-                    regressors['fixed_event_duration']['unmodulated'],
-                    regressors['fixed_event_duration']['modulated']), axis=1)
-        x_duration_mean_rt = np.concatenate((np.ones(reg_shape),
-                    regressors['fixed_mean_rt']['unmodulated'],
-                    regressors['fixed_mean_rt']['modulated']), axis=1)
-        x_duration_rt_only = np.concatenate((np.ones(reg_shape),
-                    regressors['rt']['unmodulated']), axis=1)
-        x_duration_event_only = np.concatenate((np.ones(reg_shape),
-                    regressors['fixed_event_duration']['unmodulated']), axis=1)
-        x_duration_event_duration_rt_orth = np.concatenate((np.ones(reg_shape),
-                    regressors['fixed_event_duration']['unmodulated'],
-                    regressors['rt_orth']['unmodulated']), axis=1)
-
-        models = {'Impulse Duration': x_duration_0,
-              'Fixed/RT Duration (orth)': x_duration_event_duration_rt_orth,
-              'Stimulus Duration': x_duration_event_duration,
-              'Mean RT Duration': x_duration_mean_rt,
-              'RT Duration only': x_duration_rt_only,
-              'No RT effect': x_duration_event_only}
+                                   max_rt, min_rt, event_duration, ISI_min, 
+                                   ISI_max, center_rt)
+        models = make_design_matrices(regressors)
         win_sub_var_est =  {key: {} for key in models}
         for model_name, model_mtx in models.items():
             if hp_filter == True:
@@ -315,11 +364,12 @@ def est_win_sub_mod_sd(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     return(output)
 
 
-
 def sim_fit_sub(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
               lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, win_sub_noise_sd=0.1, center_rt=True,
-              beta_scales_yes = 1, beta_scales_no = 1, hp_filter=True):
+              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, 
+              win_sub_noise_sd_scales_yes=0.1, win_sub_noise_sd_scales_no=0.1, 
+              center_rt=True, beta_scales_yes = 1, beta_scales_no = 1, 
+              hp_filter=True):
     """Runs 3 models with two different dependent variables and estimates
     unmodulated parameter estimate.  For 
     first model, dependent variable is BOLD signal that scales with reaction
@@ -335,345 +385,139 @@ def sim_fit_sub(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     regressors, mean_rt = make_regressors_one_trial_type(n_trials, scan_length, 
                                    repetition_time, mu_expnorm, 
                                    lam_expnorm, sigma_expnorm,
-                                   max_rt, min_rt, event_duration, ISI_min, ISI_max, center_rt)
+                                   max_rt, min_rt, event_duration, ISI_min, 
+                                   ISI_max, center_rt)
     dv_scales_yes = beta_scales_yes*regressors['rt']['unmodulated'] + \
-                     np.random.normal(0, win_sub_noise_sd, (scan_length, 1))
+                     np.random.normal(0, win_sub_noise_sd_scales_yes, 
+                     (scan_length, 1))
     dv_scales_no = beta_scales_no*regressors['fixed_zero']['unmodulated']+ \
-                     np.random.normal(0, win_sub_noise_sd, (scan_length, 1))
-    
-    x_duration_0 = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['fixed_zero']['unmodulated'],
-                    regressors['fixed_zero']['modulated']), axis=1)
-    x_duration_event_duration = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['fixed_event_duration']['unmodulated'],
-                    regressors['fixed_event_duration']['modulated']), axis=1)
-    x_duration_mean_rt = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['fixed_mean_rt']['unmodulated'],
-                    regressors['fixed_mean_rt']['modulated']), axis=1)
-    x_duration_rt_only = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['rt']['unmodulated']), axis=1)
-    x_duration_event_only = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['fixed_event_duration']['unmodulated']), axis=1)
-    x_duration_event_duration_rt_orth = np.concatenate((np.ones(dv_scales_yes.shape),
-                    regressors['fixed_event_duration']['unmodulated'],
-                    regressors['rt_orth']['unmodulated']), axis=1)
-    
-    models = {'Impulse Duration': x_duration_0,
-              'Fixed/RT Duration (orth)': x_duration_event_duration_rt_orth,
-              'Stimulus Duration': x_duration_event_duration,
-              'Mean RT Duration': x_duration_mean_rt,
-              'RT Duration only': x_duration_rt_only,
-              'No RT effect': x_duration_event_only}
+                     np.random.normal(0, win_sub_noise_sd_scales_no, 
+                     (scan_length, 1))
     dependent_variables = {'dv_scales_yes': dv_scales_yes,
             'dv_scales_no': dv_scales_no}
-    
-    unmod_beta_est = {key: {key2: {} for key2 in models} for key in 
-        dependent_variables}
-    rtmod_beta_est = {key: {key2: {} for key2 in models} for key in 
-        dependent_variables}
-    unmod_beta_p = {key: {key2: {} for key2 in models} for key in 
-        dependent_variables}
-    rtmod_beta_p = {key: {key2: {} for key2 in models} for key in 
-        dependent_variables}
-    model_r2 = {key: {key2: {} for key2 in models} for key in 
-        dependent_variables}
+    models = make_design_matrices(regressors)
+
+    unmod_beta_est = make_empty_dict_model_keys(1)
+    rtmod_beta_est = make_empty_dict_model_keys(1)
+    unmod_beta_p = make_empty_dict_model_keys(1)
+    rtmod_beta_p = make_empty_dict_model_keys(1)
+    model_r2 = make_empty_dict_model_keys(1)
     for model_name, model_mtx in models.items():
         for dependent_variable_name, dv in dependent_variables.items():
             if model_mtx.shape[1] == 2:
                 contrasts = np.array([[0, 1]])
             if model_mtx.shape[1] == 3:
                 contrasts = np.array([[0, 1, 0], [0, 0, 1]])
-            con_estimates, _, p_values, _, _, r2  = runreg(dv, model_mtx, contrasts, 
-            hp_filter, compute_stats=True)
+            con_estimates, _, p_values, _, _, r2  = runreg(dv, model_mtx, 
+                    contrasts, hp_filter, compute_stats=True)
             model_r2[dependent_variable_name][model_name] = r2
             if (model_mtx.shape[1] == 2) & (model_name == 'RT Duration only'):
                 unmod_beta_est[dependent_variable_name][model_name] = np.nan
                 unmod_beta_p[dependent_variable_name][model_name] = np.nan
-                rtmod_beta_est[dependent_variable_name][model_name] = con_estimates[0]
+                rtmod_beta_est[dependent_variable_name][model_name] = \
+                    con_estimates[0]
                 rtmod_beta_p[dependent_variable_name][model_name] = p_values[0]
             elif (model_mtx.shape[1] == 2) & (model_name == 'No RT effect'):
-                unmod_beta_est[dependent_variable_name][model_name] = con_estimates[0]
+                unmod_beta_est[dependent_variable_name][model_name] = \
+                    con_estimates[0]
                 unmod_beta_p[dependent_variable_name][model_name] = p_values[0]
                 rtmod_beta_est[dependent_variable_name][model_name] = np.nan
                 rtmod_beta_p[dependent_variable_name][model_name] = np.nan
             else:
-                unmod_beta_est[dependent_variable_name][model_name] = con_estimates[0]
+                unmod_beta_est[dependent_variable_name][model_name] = \
+                    con_estimates[0]
                 unmod_beta_p[dependent_variable_name][model_name] = p_values[0]
-                rtmod_beta_est[dependent_variable_name][model_name] = con_estimates[1]
+                rtmod_beta_est[dependent_variable_name][model_name] = \
+                    con_estimates[1]
                 rtmod_beta_p[dependent_variable_name][model_name] = p_values[1]
                 
-    return unmod_beta_est, rtmod_beta_est, unmod_beta_p, rtmod_beta_p, mean_rt, model_r2
+    return unmod_beta_est, rtmod_beta_est, unmod_beta_p, rtmod_beta_p, mean_rt,\
+           model_r2
 
-
-def lev1_many_subs(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
-              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, win_sub_noise_sd=0.1, btwn_sub_noise_sd=1, nsub = 50,
-              center_rt=True, beta_scales_yes = 1, beta_scales_no = 1, hp_filter=True):
-        
+def list_dicts_to_dict_tuples(list_of_dicts):
     """
-    Stuff
+    Converts a list of dictionaries to a dicitonary of tuples
+    list_of_dicts: A list of dictionaries where the key structure is identical 
+    for all dictionaries.
+
+    Assumes dictionary has two levels (dictionary within-dictionary) where the
+    keys of the first level dictionaries match
     """
-    unmod_beta_est_all_list_dict = list()
-    rtmod_beta_est_all_list_dict = list()
-    mean_rt_all = list()
-    r2_all = list()
+    out_dict = defaultdict(dict)
+    top_level_keys = list(list_of_dicts[0].keys())
+    second_level_keys = list(list_of_dicts[0][top_level_keys[0]].keys())
 
-    for sub in range(0, nsub):
-        beta_scales_yes_sub = beta_scales_yes + np.random.normal(0, btwn_sub_noise_sd, (1, 1))
-        beta_scales_no_sub = beta_scales_no + np.random.normal(0, btwn_sub_noise_sd, (1, 1))
-        unmod_beta_est_loop, rtmod_beta_est_loop, _, _, mean_rt, r2 = sim_fit_sub(n_trials, scan_length, 
-            repetition_time, mu_expnorm, lam_expnorm,
-            sigma_expnorm, max_rt, min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, center_rt,
-            beta_scales_yes_sub, beta_scales_no_sub, hp_filter)
-        unmod_beta_est_all_list_dict.append(unmod_beta_est_loop)
-        rtmod_beta_est_all_list_dict.append(rtmod_beta_est_loop)
-        mean_rt_all.append(mean_rt)
-        r2_all.append(r2)
-
-    # There must be a better way to do this
-    unmod_beta_est_all_dict = {key: {key2: {} for key2 in \
-        unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        unmod_beta_est_all_list_dict[0]}
-    for i in unmod_beta_est_all_dict.keys():
-        for j in unmod_beta_est_all_dict[i].keys():
-            unmod_beta_est_all_dict[i][j] = \
-                np.array(list(unmod_beta_est_all_dict[i][j] 
-                for unmod_beta_est_all_dict in unmod_beta_est_all_list_dict))
-
-    rtmod_beta_est_all_dict = {key: {key2: {} for key2 in \
-        rtmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        rtmod_beta_est_all_list_dict[0]}
-    for i in rtmod_beta_est_all_dict.keys():
-        for j in rtmod_beta_est_all_dict[i].keys():
-            rtmod_beta_est_all_dict[i][j] = \
-                np.array(list(rtmod_beta_est_all_dict[i][j] 
-                for rtmod_beta_est_all_dict in rtmod_beta_est_all_list_dict))
+    for i in top_level_keys:
+        for j in second_level_keys:
+            out_dict[i][j] = tuple(val[i][j] for val in list_of_dicts)
+    return dict(out_dict)
     
-    r2_dict = {key: {key2: {} for key2 in \
-        r2_all[0]['dv_scales_yes']} for key in 
-        r2_all[0]}
-    for i in r2_dict.keys():
-        for j in r2_dict[i].keys():
-            r2_dict[i][j] = \
-                np.array(list(r2_dict[i][j] 
-                for r2_dict in r2_all))
-    dat_out = {'unmod_beta_est': unmod_beta_est_all_dict, 
-               'rtmod_beta_est': rtmod_beta_est_all_dict,
-               'r2': r2_dict,
-               'rt_mean': mean_rt_all}
-    return dat_out
+     
 
-
-def sim_fit_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
-              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, win_sub_noise_sd=0.1, btwn_sub_noise_sd=1, nsub = 50,
-              center_rt=True, beta_scales_yes = 1, beta_scales_no = 1, hp_filter=True):
-    """FIX THIS Runs 3 models with two different dependent variables and estimates
-    unmodulated parameter estimate.  For 
-    first model, dependent variable is BOLD signal that scales with reaction
-    time (duration is reaction time) while dependent variable for second model
-    doesn't scale with reaction time (duration is max_rt).  
-
-    The three models each include 2 regressors and unmodulated regressor and
-    one modulated by mean centered reaction time.  The difference is the 
-    durations of the two regressors which are set to 0s, event duration (max_rt)
-    and mean of the reaction time across trials for each of the 3 models.
-    """
-    unmod_beta_est_all_list_dict = list()
-    rtmod_beta_est_all_list_dict = list()
-    mean_rt_all = list()
-    r2_all = list()
-
-    for sub in range(0, nsub):
-        beta_scales_yes_sub = beta_scales_yes + np.random.normal(0, btwn_sub_noise_sd, (1, 1))
-        beta_scales_no_sub = beta_scales_no + np.random.normal(0, btwn_sub_noise_sd, (1, 1))
-        unmod_beta_est_loop, rtmod_beta_est_loop, _, _, mean_rt, r2 = sim_fit_sub(n_trials, scan_length, 
-            repetition_time, mu_expnorm, lam_expnorm,
-            sigma_expnorm, max_rt, min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, center_rt,
-            beta_scales_yes_sub, beta_scales_no_sub, hp_filter)
-        unmod_beta_est_all_list_dict.append(unmod_beta_est_loop)
-        rtmod_beta_est_all_list_dict.append(rtmod_beta_est_loop)
-        mean_rt_all.append(mean_rt)
-        r2_all.append(r2)
-
-    # There must be a better way to do this
-    unmod_beta_est_all_dict = {key: {key2: {} for key2 in \
-        unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        unmod_beta_est_all_list_dict[0]}
-    for i in unmod_beta_est_all_dict.keys():
-        for j in unmod_beta_est_all_dict[i].keys():
-            unmod_beta_est_all_dict[i][j] = \
-                np.array(list(unmod_beta_est_all_dict[i][j] 
-                for unmod_beta_est_all_dict in unmod_beta_est_all_list_dict))
-
-    rtmod_beta_est_all_dict = {key: {key2: {} for key2 in \
-        rtmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        rtmod_beta_est_all_list_dict[0]}
-    for i in rtmod_beta_est_all_dict.keys():
-        for j in rtmod_beta_est_all_dict[i].keys():
-            rtmod_beta_est_all_dict[i][j] = \
-                np.array(list(rtmod_beta_est_all_dict[i][j] 
-                for rtmod_beta_est_all_dict in rtmod_beta_est_all_list_dict))
-
-    unmod_cor_with_rt = {key: {key2: {} for key2 in unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        unmod_beta_est_all_list_dict[0]}
-    rtmod_cor_with_rt = {key: {key2: {} for key2 in unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        rtmod_beta_est_all_list_dict[0]}
-    unmod_1samp_t_pval = {key: {key2: {} for key2 in unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        unmod_beta_est_all_list_dict[0]}
-    rtmod_1samp_t_pval = {key: {key2: {} for key2 in unmod_beta_est_all_list_dict[0]['dv_scales_yes']} for key in 
-        unmod_beta_est_all_list_dict[0]}
-    for i in unmod_cor_with_rt.keys():
-        for j in unmod_cor_with_rt[i].keys():
-            if np.isnan(unmod_beta_est_all_dict[i][j][0]):
-                unmod_cor_with_rt[i][j] = float("nan")
-            else: 
-                unmod_cor_with_rt[i][j], _ = \
-                    scipy.stats.pearsonr(unmod_beta_est_all_dict[i][j],
-                    mean_rt_all)
-    for i in rtmod_cor_with_rt.keys():
-        for j in rtmod_cor_with_rt[i].keys():
-            if np.isnan(rtmod_beta_est_all_dict[i][j][0]):
-                rtmod_cor_with_rt[i][j] = float("nan")
-            else:
-                rtmod_cor_with_rt[i][j], _ = \
-                    scipy.stats.pearsonr(rtmod_beta_est_all_dict[i][j],
-                    mean_rt_all)
-    for i in unmod_1samp_t_pval.keys():
-        for j in unmod_1samp_t_pval[i].keys():
-            X = [1] * len(mean_rt_all)
-            ols_mod = sm.OLS(unmod_beta_est_all_dict[i][j], X)
-            ols_p_values = ols_mod.fit().pvalues
-            unmod_1samp_t_pval[i][j] = ols_p_values[0]
-    for i in rtmod_1samp_t_pval.keys():
-        for j in rtmod_1samp_t_pval[i].keys():
-            X = [1] * len(mean_rt_all)
-            ols_mod = sm.OLS(rtmod_beta_est_all_dict[i][j], X)
-            ols_p_values = ols_mod.fit().pvalues
-            rtmod_1samp_t_pval[i][j] = ols_p_values[0]
-    return unmod_cor_with_rt, rtmod_cor_with_rt, unmod_1samp_t_pval, rtmod_1samp_t_pval
-            
-
-def many_sim_fit_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
-              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, win_sub_noise_sd=0.1, btwn_sub_noise_sd=1, 
-              nsub=50, nsim=50, center_rt=True, beta_scales_yes=1, beta_scales_no=1, hp_filter=True):
-    unmod_cor_with_rt_sims = list()
-    rtmod_cor_with_rt_sims = list()
-    unmod_1samp_t_pval_sims = list()
-    rtmod_1samp_t_pval_sims = list()
-    for sim in range(0, nsim):
-        unmod_cor_with_rt_loop, rtmod_cor_with_rt_loop, unmod_1samp_t_pval_loop, rtmod_1samp_t_pval_loop = sim_fit_group(n_trials, scan_length,\
-            repetition_time, mu_expnorm,
-            lam_expnorm, sigma_expnorm, max_rt, 
-            min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, btwn_sub_noise_sd, nsub, center_rt, 
-            beta_scales_yes, beta_scales_no, hp_filter)
-        unmod_cor_with_rt_sims.append(unmod_cor_with_rt_loop)
-        rtmod_cor_with_rt_sims.append(rtmod_cor_with_rt_loop)
-        unmod_1samp_t_pval_sims.append(unmod_1samp_t_pval_loop)
-        rtmod_1samp_t_pval_sims.append(rtmod_1samp_t_pval_loop)
-
-    unmod_cor_with_rt_sims_dict =  {key: {key2: {} for key2 in \
-        unmod_cor_with_rt_sims[0]['dv_scales_yes']} for key in 
-        unmod_cor_with_rt_sims[0]}   
-    for i in unmod_cor_with_rt_sims_dict.keys():
-        for j in unmod_cor_with_rt_sims_dict[i].keys():
-            unmod_cor_with_rt_sims_dict[i][j] = tuple(unmod_cor_with_rt_sims_dict[i][j] 
-                for unmod_cor_with_rt_sims_dict in unmod_cor_with_rt_sims)
-
-    rtmod_cor_with_rt_sims_dict =  {key: {key2: {} for key2 in \
-        rtmod_cor_with_rt_sims[0]['dv_scales_yes']} for key in 
-        rtmod_cor_with_rt_sims[0]}   
-    for i in rtmod_cor_with_rt_sims_dict.keys():
-        for j in rtmod_cor_with_rt_sims_dict[i].keys():
-            rtmod_cor_with_rt_sims_dict[i][j] = tuple(rtmod_cor_with_rt_sims_dict[i][j] 
-                for rtmod_cor_with_rt_sims_dict in rtmod_cor_with_rt_sims) 
-    unmod_1samp_t_pval_dict =  {key: {key2: {} for key2 in \
-        unmod_1samp_t_pval_sims[0]['dv_scales_yes']} for key in 
-        unmod_1samp_t_pval_sims[0]}   
-    for i in unmod_1samp_t_pval_dict.keys():
-        for j in unmod_1samp_t_pval_dict[i].keys():
-            unmod_1samp_t_pval_dict[i][j] = tuple(unmod_1samp_t_pval_dict[i][j] 
-                for unmod_1samp_t_pval_dict in unmod_1samp_t_pval_sims)
-    rtmod_1samp_t_pval_dict =  {key: {key2: {} for key2 in \
-        rtmod_1samp_t_pval_sims[0]['dv_scales_yes']} for key in 
-        rtmod_1samp_t_pval_sims[0]}   
-    for i in rtmod_1samp_t_pval_dict.keys():
-        for j in rtmod_1samp_t_pval_dict[i].keys():
-            rtmod_1samp_t_pval_dict[i][j] = tuple(rtmod_1samp_t_pval_dict[i][j] 
-                for rtmod_1samp_t_pval_dict in rtmod_1samp_t_pval_sims)
-    return unmod_cor_with_rt_sims_dict, rtmod_cor_with_rt_sims_dict, unmod_1samp_t_pval_dict, rtmod_1samp_t_pval_dict
-
-
-def calc_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
+def calc_win_sub_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
               lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min_max_vec, win_sub_noise_sd,  
+              min_rt, event_duration, ISI_min_max_vec,
+              win_sub_noise_sd_range_scales_yes, 
+              win_sub_noise_sd_range_scales_no,  
               center_rt, beta_scales_yes, beta_scales_no, hp_filter, nsim_pow):
     """Stuff
     """
+    if len(win_sub_noise_sd_range_scales_yes) != \
+                         len(win_sub_noise_sd_range_scales_no):
+        print("win_sub_noise_sd_range_scales_yes/no must have same lengths")
+        return
+    num_sd = len(win_sub_noise_sd_range_scales_yes)
     output_unmod_beta_power = {}
     output_rtmod_beta_power = {}
     for isi_loop in ISI_min_max_vec:
         print(isi_loop)
-        output_unmod_beta_power[isi_loop] = make_empty_dict_model_keys()
-        output_rtmod_beta_power[isi_loop] = make_empty_dict_model_keys()
+        output_unmod_beta_power[isi_loop] = make_empty_dict_model_keys(num_sd)
+        output_rtmod_beta_power[isi_loop] = make_empty_dict_model_keys(num_sd)
         ISI_min = isi_loop[0]
         ISI_max = isi_loop[1]
-        calc_cor_out = calc_cor_over_noise_range(100, n_trials, scan_length, repetition_time, mu_expnorm,
-                    lam_expnorm, sigma_expnorm, max_rt,
-                    min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, center_rt,
-                    beta_scales_yes, beta_scales_no)
-        output_unmod_beta_power[isi_loop]['cor_est_scales_no_filt'] = calc_cor_out['cor_est_scales_no_filt']
-        output_rtmod_beta_power[isi_loop]['cor_est_scales_yes_filt'] = calc_cor_out['cor_est_scales_yes_filt']
-        for win_sub_noise_sd_loop in win_sub_noise_sd:
-            unmod_beta_p_vec = make_empty_dict_model_keys()
-            rtmod_beta_p_vec = make_empty_dict_model_keys()  
+        calc_cor_out = calc_cor_over_noise_range(100, n_trials, scan_length, 
+                    repetition_time, mu_expnorm,lam_expnorm, sigma_expnorm, 
+                    max_rt,min_rt, event_duration, ISI_min, ISI_max, 
+                    win_sub_noise_sd_range_scales_yes, 
+                    win_sub_noise_sd_range_scales_no, 
+                    center_rt,beta_scales_yes, beta_scales_no)
+        output_unmod_beta_power[isi_loop]['cor_est_scales_no_filt_yes'] = \
+                    calc_cor_out['cor_est_scales_no_filt_yes']
+        output_rtmod_beta_power[isi_loop]['cor_est_scales_yes_filt_yes'] = \
+                    calc_cor_out['cor_est_scales_yes_filt_yes']
+        for sd_ind in range(0, num_sd):
+            unmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow)
+            rtmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow) 
+            start_time = time.time() 
             for sim in range(0, nsim_pow):
-                unmod_beta_est, rtmod_beta_est, unmod_beta_p, rtmod_beta_p, mean_rt, _ = sim_fit_sub(n_trials, scan_length, repetition_time, mu_expnorm,
-                        lam_expnorm, sigma_expnorm, max_rt, 
-                        min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd_loop, center_rt,
-                        beta_scales_yes, beta_scales_no, hp_filter)
+                if sim%1000 == 0:
+                    print(sim)
+                    print(start_time - time.time())
+                    start_time = time.time()
+                _, _, unmod_beta_p, rtmod_beta_p, _, _ = \
+                    sim_fit_sub(n_trials, scan_length, repetition_time, 
+                                mu_expnorm,lam_expnorm, sigma_expnorm, max_rt, 
+                                min_rt, event_duration, ISI_min, ISI_max, 
+                                win_sub_noise_sd_range_scales_yes[sd_ind], 
+                                win_sub_noise_sd_range_scales_no[sd_ind], 
+                                center_rt, beta_scales_yes, beta_scales_no,
+                                hp_filter)
                 for i in unmod_beta_p_vec.keys():
                     for j in unmod_beta_p_vec[i].keys():
-                        unmod_beta_p_vec[i][j].append(unmod_beta_p[i][j])
-                        rtmod_beta_p_vec[i][j].append(rtmod_beta_p[i][j])
-            
+                        unmod_beta_p_vec[i][j][sim] = unmod_beta_p[i][j]
+                        rtmod_beta_p_vec[i][j][sim] = rtmod_beta_p[i][j]
+            print('calculating power')              
             for i in unmod_beta_p_vec.keys():
                 for j in unmod_beta_p_vec[i].keys():
-                    output_unmod_beta_power[isi_loop][i][j].append(np.mean(np.array(unmod_beta_p_vec[i][j]) <= 0.05))
-                    output_rtmod_beta_power[isi_loop][i][j].append(np.mean(np.array(rtmod_beta_p_vec[i][j]) <= 0.05))
-            
+                    output_unmod_beta_power[isi_loop][i][j][sd_ind] = \
+                        np.mean(np.array(unmod_beta_p_vec[i][j]) <= 0.05)
+                    output_rtmod_beta_power[isi_loop][i][j][sd_ind]=\
+                        np.mean(np.array(rtmod_beta_p_vec[i][j]) <= 0.05)       
     return output_unmod_beta_power, output_rtmod_beta_power
 
 
-def pow_within_sub_range_isi(n_trials, scan_length, 
-             repetition_time, mu_expnorm,
-              lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min_max_vec, win_sub_noise_sd_range,  
-              center_rt, beta_scales_yes, beta_scales_no, hp_filter, nsim_pow):
-    output = {}
-    for i in range(len(ISI_min_max_vec)):  
-    #print(i)
-        output[ISI_min_max_vec[i]] = {}
-        calc_cor_out = calc_cor_over_noise_range(100, n_trials, scan_length, repetition_time, mu_expnorm,
-                    lam_expnorm, sigma_expnorm, max_rt,
-                    min_rt, event_duration, ISI_min_max_vec[i][0], ISI_min_max_vec[i][1], win_sub_noise_sd_range, center_rt,
-                    beta_scales_yes, beta_scales_no)
-        pow_var_epoch_mod, pow_unmod_var_impulse, pow_rtmod_var_impulse, _, _ = calc_pow_range(n_trials, scan_length, 
-             repetition_time, mu_expnorm,
-              lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min_max_vec[i][0], ISI_min_max_vec[i][1], win_sub_noise_sd_range,  
-              center_rt, beta_scales_yes, beta_scales_no, hp_filter, nsim_pow)
-        output[ISI_min_max_vec[i]]['correlation_scales_yes'] = calc_cor_out['cor_est_scales_yes_filt']
-        output[ISI_min_max_vec[i]]['correlation_scales_no'] = calc_cor_out['cor_est_scales_no_filt']
-        output[ISI_min_max_vec[i]]['power_var_epoch'] = pow_var_epoch_mod
-        output[ISI_min_max_vec[i]]['pow_unmod_var_impulse'] = pow_unmod_var_impulse
-        output[ISI_min_max_vec[i]]['pow_rtmod_var_impulse'] = pow_rtmod_var_impulse
-    return output
-
-
-def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power, sim_type='dv_scales_yes',
-                    zoom=False):
+def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power, 
+                    sim_type='dv_scales_yes',zoom=False):
     isi_labels = list(output_unmod_beta_power.keys())
     nrows_plot = 2
     ncols_plot = len(isi_labels)//2
@@ -688,9 +532,11 @@ def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power, sim_type='
         plt.setp(axs, xlim=zoom)
     for i in range(len(isi_labels)):
         if sim_type == 'dv_scales_yes':
-            correlation = output_rtmod_beta_power[isi_labels[i]]['cor_est_scales_yes_filt']
+            correlation = \
+                output_rtmod_beta_power[isi_labels[i]]['cor_est_scales_yes_filt_yes']
         if sim_type == 'dv_scales_no':
-            correlation = output_unmod_beta_power[isi_labels[i]]['cor_est_scales_no_filt']
+            correlation = \
+                output_unmod_beta_power[isi_labels[i]]['cor_est_scales_no_filt_yes']
         panel_row = i//ncols_plot
         panel_col = i%ncols_plot
         line1, = axs[panel_row, panel_col].plot(
@@ -733,31 +579,35 @@ def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power, sim_type='
                     correlation, 
                     output_unmod_beta_power[isi_labels[i]][sim_type]['No RT effect'], 
                     color='tab:olive', label = 'Const (stimulus duration)')
-        #axs[panel_row, panel_col].set_xscale('log') 
         axs[panel_row, panel_col].set_title(f'ISI=U{isi_labels[i]}')
     fig.tight_layout()
-    #plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, line9, line10], 
-    #           loc='center right', bbox_to_anchor=(panel_col+1.9, panel_row/2+1), ncol=1)
-    plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, line9, line10], 
-              loc='center right', bbox_to_anchor=(panel_col+.7, panel_row/2), ncol=1)
+    plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, 
+               line9, line10], 
+              loc='center right', bbox_to_anchor=(panel_col+.7, panel_row/2), 
+              ncol=1)
     plt.show()
 
 
 def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot, 
                     mu_expnorm, lam_expnorm, sigma_expnorm, ISI_min, ISI_max, 
-                    win_sub_noise_sd, btwn_sub_noise_sd, nsub, nsim, 
-                    beta_scales_yes, beta_scales_no, hp_filter):
-    unmodulated_scales_yes = pd.DataFrame(unmod_cor_with_rt_corplot['dv_scales_yes'])
+                    win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no, 
+                    btwn_sub_noise_sd_scales_yes, btwn_sub_noise_sd_scales_no, 
+                    nsub, nsim, beta_scales_yes, beta_scales_no, hp_filter):
+    unmodulated_scales_yes = \
+        pd.DataFrame(unmod_cor_with_rt_corplot['dv_scales_yes'])
     unmodulated_scales_yes['True Signal'] = 'Scales with RT'
-    unmodulated_scales_no = pd.DataFrame(unmod_cor_with_rt_corplot['dv_scales_no'])
+    unmodulated_scales_no = \
+        pd.DataFrame(unmod_cor_with_rt_corplot['dv_scales_no'])
     unmodulated_scales_no['True Signal'] = 'Does not scale with RT'
     dat_unmodulated = pd.concat([unmodulated_scales_yes, unmodulated_scales_no])
     unmod_long = pd.melt(dat_unmodulated, id_vars = 'True Signal')
     unmod_long['Lower Level Estimate'] = 'Stimulus vs baseline'
 
-    rtmodulated_scales_yes = pd.DataFrame(rtmod_cor_with_rt_corplot['dv_scales_yes'])
+    rtmodulated_scales_yes = \
+        pd.DataFrame(rtmod_cor_with_rt_corplot['dv_scales_yes'])
     rtmodulated_scales_yes['True Signal'] = 'Scales with RT'
-    rtmodulated_scales_no = pd.DataFrame(rtmod_cor_with_rt_corplot['dv_scales_no'])
+    rtmodulated_scales_no = \
+        pd.DataFrame(rtmod_cor_with_rt_corplot['dv_scales_no'])
     rtmodulated_scales_no['True Signal'] = 'Does not scale with RT'
     dat_rtmodulated = pd.concat([rtmodulated_scales_yes, rtmodulated_scales_no])
     rtmod_long = pd.melt(dat_rtmodulated, id_vars = 'True Signal')
@@ -770,16 +620,27 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
              dat_long['Lower Level Estimate'].cat.reorder_categories(\
                  ['Stimulus vs baseline',
                  'RT modulation']) 
+    dat_long['variable'] = \
+        dat_long['variable'].astype('category')          
+    dat_long['variable'] = \
+        dat_long['variable'].cat.reorder_categories(\
+                 ['Fixed/RT Duration (orth)',
+                  'Stimulus Duration',
+                  'Impulse Duration',
+                  'Mean RT Duration',
+                  'RT Duration only',
+                  'No RT effect'])
     cor_t_cutoff = abs(t.ppf(.025, nsub))
     cor_cutoff = cor_t_cutoff/(nsub - 2 +cor_t_cutoff**2)**.5
 
     sns.set_theme(style="whitegrid", font_scale=2)
     g = sns.catplot(data = dat_long, x='variable', y='value',
                 hue='True Signal', row='Lower Level Estimate', kind='violin',
-                palette='bright',  aspect = 5, height =4)
+                palette='gray',  aspect = 5, height =4)
     g.set_ylabels('Correlation',size=30)
     g.set_xlabels('',size=30, clear_inner=False)
-    titles = [r'Cor($\hat\beta_{trial}$, $RT_{WS}$)', r'Cor($\hat\beta_{RT_{BT}}$ , $RT_{WS}$)']
+    titles = [r'Cor($\hat\beta_{trial}$, $RT_{WS}$)', 
+             r'Cor($\hat\beta_{RT_{BT}}$ , $RT_{WS}$)']
     for count, ax in enumerate(g.axes.flatten()):
         ax.tick_params(labelbottom=True)
         ax.axhline(0, color='black')
@@ -787,111 +648,227 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
         ax.axhline(-1*cor_cutoff, linestyle='dashed', color='gray')
         ax.set_title(titles[count])
     plt.subplots_adjust(hspace=.5)
-    fig_root = Path('/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Figures/')
-    plt.savefig(f"{fig_root}/rt_cor_plot_mu_{round(mu_expnorm, 2)}_laminv_{round(1/lam_expnorm, 2)}_sig_{round(sigma_expnorm, 2)}_isi_{ISI_min}_{ISI_max}_sw_{win_sub_noise_sd}_sb_{btwn_sub_noise_sd}_nsub{nsub}_byes{beta_scales_yes}_bno{beta_scales_no}_hpfilt_{hp_filter}.pdf",
+    fig_root = \
+    Path('/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Figures/')
+    plt.savefig(f"{fig_root}/rt_cor_plot_mu_{round(mu_expnorm, 2)}_laminv_{round(1/lam_expnorm, 2)}_sig_{round(sigma_expnorm, 2)}_isi_{ISI_min}_{ISI_max}_sw_scalesyes_no{win_sub_noise_sd_scales_yes}_{win_sub_noise_sd_scales_no}_sb_yes_no{btwn_sub_noise_sd_scales_yes}_{btwn_sub_noise_sd_scales_no}_nsub{nsub}_byes{beta_scales_yes}_bno{beta_scales_no}_hpfilt_{hp_filter}.pdf",
             format='pdf', transparent=True, pad_inches=.5, bbox_inches='tight')
     plt.show()
     
 
-def group_power(n_trials, scan_length, repetition_time, 
+def sim_one_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
+              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
+              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, 
+              win_sub_noise_sd_scales_yes=0.1, win_sub_noise_sd_scales_no=0.1, 
+              btwn_sub_noise_sd_scales_yes=1, btwn_sub_noise_sd_scales_no=1, 
+              nsub = 50, center_rt=True, beta_scales_yes = 1, 
+              beta_scales_no = 1, hp_filter=True):
+    """FIX THIS Runs 3 models with two different dependent variables and estimates
+    unmodulated parameter estimate.  For 
+    first model, dependent variable is BOLD signal that scales with reaction
+    time (duration is reaction time) while dependent variable for second model
+    doesn't scale with reaction time (duration is max_rt).  
+
+    The three models each include 2 regressors and unmodulated regressor and
+    one modulated by mean centered reaction time.  The difference is the 
+    durations of the two regressors which are set to 0s, event duration (max_rt)
+    and mean of the reaction time across trials for each of the 3 models.
+    """
+    unmod_beta_est_all_list_dict = list()
+    rtmod_beta_est_all_list_dict = list()
+    r2_all_list_dict = list()
+    mean_rt_all = list()
+    
+    for sub in range(0, nsub):
+        beta_scales_yes_sub = beta_scales_yes + \
+             np.random.normal(0, btwn_sub_noise_sd_scales_yes, (1, 1))
+        beta_scales_no_sub = beta_scales_no + \
+             np.random.normal(0, btwn_sub_noise_sd_scales_no, (1, 1))
+        unmod_beta_est_loop, rtmod_beta_est_loop, _, _, mean_rt, r2 = \
+            sim_fit_sub(n_trials, scan_length, 
+            repetition_time, mu_expnorm, lam_expnorm,
+            sigma_expnorm, max_rt, min_rt, event_duration, ISI_min, ISI_max, 
+            win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no, center_rt,
+            beta_scales_yes_sub, beta_scales_no_sub, hp_filter)
+        unmod_beta_est_all_list_dict.append(unmod_beta_est_loop)
+        rtmod_beta_est_all_list_dict.append(rtmod_beta_est_loop)
+        mean_rt_all.append(mean_rt)
+        r2_all_list_dict.append(r2)
+
+    unmod_beta_est_all_dict = \
+        list_dicts_to_dict_tuples(unmod_beta_est_all_list_dict)
+    rtmod_beta_est_all_dict = \
+        list_dicts_to_dict_tuples(rtmod_beta_est_all_list_dict)
+    r2_dict = list_dicts_to_dict_tuples(r2_all_list_dict)
+    
+    unmod_cor_with_rt = make_empty_dict_model_keys(1)
+    rtmod_cor_with_rt = make_empty_dict_model_keys(1)
+    unmod_1samp_t_pval = make_empty_dict_model_keys(1)
+    rtmod_1samp_t_pval = make_empty_dict_model_keys(1)
+    for i in unmod_cor_with_rt.keys():
+        for j in unmod_cor_with_rt[i].keys():
+            if np.isnan(unmod_beta_est_all_dict[i][j][0]):
+                unmod_cor_with_rt[i][j] = float("nan")
+            else: 
+                unmod_cor_with_rt[i][j], _ = \
+                    scipy.stats.pearsonr(unmod_beta_est_all_dict[i][j],
+                    mean_rt_all)
+            if np.isnan(rtmod_beta_est_all_dict[i][j][0]):
+                rtmod_cor_with_rt[i][j] = float("nan")
+            else:
+                rtmod_cor_with_rt[i][j], _ = \
+                    scipy.stats.pearsonr(rtmod_beta_est_all_dict[i][j],
+                    mean_rt_all)
+    for i in unmod_1samp_t_pval.keys():
+        for j in unmod_1samp_t_pval[i].keys():
+            X = [1] * len(mean_rt_all)
+            ols_unmod = sm.OLS(unmod_beta_est_all_dict[i][j], X)
+            ols_unmod_p_values = ols_unmod.fit().pvalues
+            unmod_1samp_t_pval[i][j] = ols_unmod_p_values[0]
+            ols_rtmod = sm.OLS(rtmod_beta_est_all_dict[i][j], X)
+            ols_rtmod_p_values = ols_rtmod.fit().pvalues
+            rtmod_1samp_t_pval[i][j] = ols_rtmod_p_values[0]
+    return unmod_cor_with_rt, rtmod_cor_with_rt,\
+           unmod_1samp_t_pval, rtmod_1samp_t_pval
+       
+
+def sim_many_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
+              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
+              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, 
+              win_sub_noise_sd_scales_yes=0.1, win_sub_noise_sd_scales_no=0.1, 
+              btwn_sub_noise_sd_scales_yes=1, btwn_sub_noise_sd_scales_no=1, 
+              nsub=50, nsim=50, center_rt=True, beta_scales_yes=1, 
+              beta_scales_no=1, hp_filter=True):
+    unmod_cor_with_rt_list_dict = list()
+    rtmod_cor_with_rt_list_dict = list()
+    unmod_1samp_t_pval_list_dict = list()
+    rtmod_1samp_t_pval_list_dict = list()
+    for sim in range(0, nsim):
+        unmod_cor_with_rt_loop, rtmod_cor_with_rt_loop, unmod_1samp_t_pval_loop, rtmod_1samp_t_pval_loop = \
+            sim_one_group(n_trials, scan_length,repetition_time, mu_expnorm,
+            lam_expnorm, sigma_expnorm, max_rt,  min_rt, event_duration, 
+            ISI_min, ISI_max, win_sub_noise_sd_scales_yes, 
+            win_sub_noise_sd_scales_no, btwn_sub_noise_sd_scales_yes, 
+            btwn_sub_noise_sd_scales_no, nsub, center_rt, 
+            beta_scales_yes, beta_scales_no, hp_filter)
+        unmod_cor_with_rt_list_dict.append(unmod_cor_with_rt_loop)
+        rtmod_cor_with_rt_list_dict.append(rtmod_cor_with_rt_loop)
+        unmod_1samp_t_pval_list_dict.append(unmod_1samp_t_pval_loop)
+        rtmod_1samp_t_pval_list_dict.append(rtmod_1samp_t_pval_loop)
+
+    unmod_cor_with_rt_sims_dict = \
+        list_dicts_to_dict_tuples(unmod_cor_with_rt_list_dict)
+    rtmod_cor_with_rt_sims_dict =  \
+        list_dicts_to_dict_tuples(rtmod_cor_with_rt_list_dict)
+    unmod_1samp_t_pval_dict = \
+        list_dicts_to_dict_tuples(unmod_1samp_t_pval_list_dict)
+    rtmod_1samp_t_pval_dict = \
+        list_dicts_to_dict_tuples(rtmod_1samp_t_pval_list_dict)
+    unmod_1samp_t_pow = p_dict_to_power_dict(unmod_1samp_t_pval_dict)
+    rtmod_1samp_t_pow = p_dict_to_power_dict(rtmod_1samp_t_pval_dict)
+    return unmod_cor_with_rt_sims_dict, rtmod_cor_with_rt_sims_dict,\
+           unmod_1samp_t_pow, rtmod_1samp_t_pow
+
+def p_dict_to_power_dict(p_dict):
+    pow_dict = defaultdict(dict)
+    for i in p_dict.keys():
+        for j in p_dict[i].keys():
+           pvals_loop = np.array(p_dict[i][j])
+           pow_dict[i][j] = np.mean(pvals_loop<0.05)
+    return pow_dict
+
+def group_power_range_btwn_sd(n_trials, scan_length, repetition_time, 
               mu_expnorm, lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, btwn_sub_noise_sd_vec, nsub, nsim, 
-              center_rt, beta_scales_yes, beta_scales_no, hp_filter):
+              min_rt, event_duration, ISI_min, ISI_max, 
+              win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no, 
+              btwn_sub_noise_sd_vec_scales_yes, btwn_sub_noise_sd_vec_scales_no,
+              nsub, nsim, center_rt, beta_scales_yes, beta_scales_no, 
+              hp_filter):
     """
+    Calculates power over a range of between-subject SD's
+    Plots correlataions with RT in violin plots
+    Returns power values
     """
+    if len(btwn_sub_noise_sd_vec_scales_yes) != \
+                         len(btwn_sub_noise_sd_vec_scales_no):
+        print("btwn_sub_noise_sd_vec_scales_yes/no must have same lengths")
+        return
     power_unmod_1sampt_all = []
     power_rtmod_1sampt_all = []
-    for btwn_sub_noise_sd in btwn_sub_noise_sd_vec:
-        unmod_cor_rt, rtmod_cor_rt, unmod_1sampt_p, rtmod_1sampt_p = \
-            many_sim_fit_group(n_trials, scan_length, repetition_time, 
+    for btwn_sub_sd_ind in range(0, len(btwn_sub_noise_sd_vec_scales_yes)):
+        unmod_cor_rt, rtmod_cor_rt, unmod_1sampt_pow, rtmod_1sampt_pow = \
+            sim_many_group(n_trials, scan_length, repetition_time, 
                 mu_expnorm, lam_expnorm, sigma_expnorm, max_rt, 
-                min_rt, event_duration, ISI_min, ISI_max, win_sub_noise_sd, btwn_sub_noise_sd, nsub, nsim, 
+                min_rt, event_duration, ISI_min, ISI_max, 
+                win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no,
+                btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind],
+                btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind], nsub, nsim, 
                 center_rt, beta_scales_yes, beta_scales_no, hp_filter)
-        power_unmod_1sampt, power_rtmod_1sampt = calc_pow_single_group(unmod_1sampt_p, rtmod_1sampt_p)
-        power_unmod_1sampt_all.append(power_unmod_1sampt)
-        power_rtmod_1sampt_all.append(power_rtmod_1sampt)
-        print(f"between-subject SD = {btwn_sub_noise_sd}\n")
+        power_unmod_1sampt_all.append(unmod_1sampt_pow)
+        power_rtmod_1sampt_all.append(rtmod_1sampt_pow)
+        print(f"Scales yes between-subject SD = {btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind]}\n")
+        print(f"Scales no between-subject SD = {btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind]}\n")
         plot_cor_violin(unmod_cor_rt, rtmod_cor_rt, 
                     mu_expnorm, lam_expnorm, sigma_expnorm, ISI_min, ISI_max, 
-                    win_sub_noise_sd, btwn_sub_noise_sd, nsub, nsim, 
+                    win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no,
+                    btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind],
+                    btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind], nsub, nsim, 
                     beta_scales_yes, beta_scales_no, hp_filter)
-    power_unmod_1sampt_output = defaultdict(dict)
-    power_rtmod_1sampt_output = defaultdict(dict)
-    for k in power_unmod_1sampt_all[0].keys():
-        for j in power_unmod_1sampt_all[0]['dv_scales_yes'].keys():
-            power_unmod_1sampt_output[k][j] = \
-                tuple(val[k][j] for 
-                      val in 
-                      power_unmod_1sampt_all)
-            power_rtmod_1sampt_output[k][j] = \
-                tuple(val[k][j] for 
-                      val in 
-                      power_rtmod_1sampt_all)
-    return dict(power_unmod_1sampt_output), dict(power_rtmod_1sampt_output)  
-
-def calc_pow_single_group(unmod_1sampt_p, rtmod_1sampt_p):
-    power_unmod_1sampt = {key: {key2: {} for key2 in unmod_1sampt_p['dv_scales_yes']} \
-       for key in unmod_1sampt_p}
-    power_rtmod_1sampt = {key: {key2: {} for key2 in rtmod_1sampt_p['dv_scales_yes']} \
-       for key in rtmod_1sampt_p}
-    for i in unmod_1sampt_p.keys():
-        for j in unmod_1sampt_p[i].keys():
-           pvals_loop = np.array(unmod_1sampt_p[i][j])
-           power_unmod_1sampt[i][j] = np.mean(pvals_loop<0.05)
-           pvals_loop = np.array(rtmod_1sampt_p[i][j])
-           power_rtmod_1sampt[i][j] = np.mean(pvals_loop<0.05)
-    return power_unmod_1sampt, power_rtmod_1sampt
+    power_unmod_1sampt_output = \
+        list_dicts_to_dict_tuples(power_unmod_1sampt_all)
+    power_rtmod_1sampt_output = \
+        list_dicts_to_dict_tuples(power_rtmod_1sampt_all)
+    return power_unmod_1sampt_output, power_rtmod_1sampt_output  
 
 
-def power_plot_group(unmod_output_power, rtmod_output_power, btwn_sub_noise_sd_vec, sim_type='dv_scales_yes',
+def power_plot_group(unmod_output_power, rtmod_output_power, total_to_within_sd_ratio, sim_type='dv_scales_yes',
                     zoom=False):
     #fig, axs = plt.subplots(1, 1, sharex=True, sharey=True)
     fig = plt.figure()
     axs = plt.subplot(111, frameon=False)
     #fig.add_subplot(111, frameon=False)
     #plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
-    plt.xlabel("Between-subject SD")
+    plt.xlabel("Total SD/within-subject SD")
     plt.ylabel("Power")
     if zoom!=False:
         plt.setp(axs, xlim=zoom)
     line1, = axs.plot(
-                     btwn_sub_noise_sd_vec, 
+                     total_to_within_sd_ratio, 
                      rtmod_output_power[sim_type]['RT Duration only'], 
                      'tab:blue', label = 'RT duration')
     line2, = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     unmod_output_power[sim_type]['Impulse Duration'], 
                     'tab:green', label = 'Const (impulse)') 
     line3,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     rtmod_output_power[sim_type]['Impulse Duration'], 
                     'tab:green', linestyle = 'dashed', label = 'RT modulated (impulse)')
     line4, = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     unmod_output_power[sim_type]['Fixed/RT Duration (orth)'], 
                     color='tab:orange', label = 'Const (stimulus duration)') 
     line5,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     rtmod_output_power[sim_type]['Fixed/RT Duration (orth)'], 
                     color='tab:orange',linestyle='dashed', label = 'Orthogonalized RT duration')
     line6,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     unmod_output_power[sim_type]['Stimulus Duration'], 
                     color='tab:purple', label = 'Const (stimulus duration)')
     line7,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     rtmod_output_power[sim_type]['Stimulus Duration'], 
                     color='tab:purple',linestyle='dashed', label = 'RT modulated (stimulus duration)')
     line8,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     unmod_output_power[sim_type]['Mean RT Duration'], 
                     color='tab:red', label = 'Const (Mean RT duration)')
     line9,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     rtmod_output_power[sim_type]['Mean RT Duration'], 
                     color='tab:red',linestyle='dashed', label = 'RT modulated (mean RT duration)')
     line10,  = axs.plot(
-                    btwn_sub_noise_sd_vec, 
+                    total_to_within_sd_ratio, 
                     unmod_output_power[sim_type]['No RT effect'], 
                     color='tab:olive', label = 'Const (stimulus duration)')
         #axs[panel_row, panel_col].set_xscale('log') 
