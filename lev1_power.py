@@ -136,7 +136,7 @@ fig.tight_layout()
 plt.legend(handles=[line1, line2, line3, line4, line5],
            loc='center right', bbox_to_anchor=(1.32, .5),
            ncol=1)
-figpath = "/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/single_sub_power.pdf"
+figpath = "/Users/jeanettemumford/sherlock_home/RT_sims/Output/single_sub_power.pdf"
 plt.savefig(figpath, format='pdf', transparent=True, pad_inches=.1,
             bbox_inches='tight')
-plt.show()
+
