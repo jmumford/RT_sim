@@ -239,8 +239,7 @@ def sim_avg_eff_size(nsim, n_trials, scan_length, repetition_time=1,
     """STUFF
     """
     eff_size_scales_yes_filt_yes_sim = []
-    eff_size_scales_no_filt_yes_sim = []
-    
+    eff_size_scales_no_filt_yes_sim = []  
     for sim in range(0, nsim):
         regressors, _ = make_regressors_one_trial_type(n_trials, scan_length, 
                                    repetition_time, mu_expnorm, 

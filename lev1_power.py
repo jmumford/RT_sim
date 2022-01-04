@@ -1,16 +1,17 @@
-import sys
-sys.path.insert(1, '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
-from functions import *
-import seaborn as sns
-import pandas as pd
-from scipy import signal
-from scipy.stats import exponnorm, gamma
+# import sys
+# sys.path.insert(1, 
+#       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
+#import scipy.stats
+import matplotlib.pyplot as plt
+import numpy as np
+from functions import calc_win_sub_pow_range
+from scipy.stats import gamma, exponnorm
 
-rt_grinband_shift = gamma.rvs(a = 1.7, loc = .5, scale = .49, size = 10000)
-shape_grinband_shift, mu_grinband_shift, sigma_grinband_shift  = exponnorm.fit(rt_grinband_shift*1000)
-inv_lambda_grinband_shift = np.multiply(sigma_grinband_shift, 
-                                            shape_grinband_shift)
-
+rt_grinband_shift = gamma.rvs(a=1.7, loc=.5, scale=.49, size=10000)
+shape_grinband_shift, mu_grinband_shift, sigma_grinband_shift =\
+     exponnorm.fit(rt_grinband_shift*1000)
+inv_lambda_grinband_shift = np.multiply(sigma_grinband_shift,
+                                        shape_grinband_shift)
 n_trials = 30
 scan_length = 225
 repetition_time = 1
@@ -25,7 +26,7 @@ event_duration = .5
 beta_scales_yes = 5
 beta_scales_no = 30
 nsim = 100
-center_rt=True
+center_rt = True
 
 win_sub_noise_sd_range_scales_yes = [1.2, 1.75,  3, 4, 10]
 win_sub_noise_sd_range_scales_no = [.25,  .35, .5,  .75, 3]
@@ -41,11 +42,13 @@ sigma_expnorm = sigma_grinband_shift
 hp_filter = True
 
 output_unmod_beta_power_grin_hp_yes, output_rtmod_beta_power_grin_hp_yes = \
-       calc_win_sub_pow_range(n_trials, scan_length,repetition_time, mu_expnorm,
-              lam_expnorm, sigma_expnorm, max_rt, min_rt, event_duration, 
-              ISI_min_max_vec, win_sub_noise_sd_range_scales_yes,
-              win_sub_noise_sd_range_scales_no, center_rt, beta_scales_yes, 
-              beta_scales_no, hp_filter, nsim_pow)
+       calc_win_sub_pow_range(n_trials, scan_length, repetition_time,
+                              mu_expnorm, lam_expnorm, sigma_expnorm,
+                              max_rt, min_rt, event_duration, ISI_min_max_vec,
+                              win_sub_noise_sd_range_scales_yes,
+                              win_sub_noise_sd_range_scales_no, center_rt,
+                              beta_scales_yes, beta_scales_no, hp_filter,
+                              nsim_pow)
 
 print('Grinband Done')
 
@@ -56,12 +59,14 @@ sigma_expnorm = 77
 win_sub_noise_sd_range_scales_yes = [.5, .75, 1.25, 2.75, 7]
 win_sub_noise_sd_range_scales_no = [.25, 0.35, 0.5, 0.8, 3]
 
-output_unmod_beta_power_stroop_hp_yes, output_rtmod_beta_power_stroop_hp_yes = \
-       calc_win_sub_pow_range(n_trials, scan_length,repetition_time, mu_expnorm,
-              lam_expnorm, sigma_expnorm, max_rt, min_rt, event_duration, 
-              ISI_min_max_vec, win_sub_noise_sd_range_scales_yes,
-              win_sub_noise_sd_range_scales_no, center_rt, beta_scales_yes, 
-              beta_scales_no, hp_filter, nsim_pow)
+output_unmod_beta_power_stroop_hp_yes, output_rtmod_beta_power_stroop_hp_yes =\
+       calc_win_sub_pow_range(n_trials, scan_length, repetition_time,
+                              mu_expnorm, lam_expnorm, sigma_expnorm,
+                              max_rt, min_rt, event_duration, ISI_min_max_vec,
+                              win_sub_noise_sd_range_scales_yes,
+                              win_sub_noise_sd_range_scales_no, center_rt,
+                              beta_scales_yes, beta_scales_no, hp_filter,
+                              nsim_pow)
 
 output_unmod_beta_power_grin = output_unmod_beta_power_grin_hp_yes
 output_rtmod_beta_power_grin = output_rtmod_beta_power_grin_hp_yes
@@ -73,17 +78,17 @@ isi_labels = isi_labels[0:3]
 nrows_plot = 4
 ncols_plot = len(isi_labels)
 fig, axs = plt.subplots(nrows_plot+1, ncols_plot, sharex=True, sharey=True,
-               figsize=(9.5, 9), gridspec_kw={"height_ratios":[0.02,1,1,1,1]})
+                        figsize=(9.5, 9),
+                        gridspec_kw={"height_ratios": [0.02, 1, 1, 1, 1]})
 fig.add_subplot(111, frameon=False)
-#fig.suptitle("Single Subject Power", fontsize=25)
-plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, 
-                     left=False, right=False)
+plt.tick_params(labelcolor='none', which='both', top=False, bottom=False,
+                left=False, right=False)
 plt.xlabel("Effect size (correlation)", fontsize=20)
 plt.ylabel("Power (within-subject)", fontsize=20)
 plt.setp(axs, xlim=(0.05, .3))
-out_types = [('grin', 'scales_yes', 'Forced Choice\n Scales with RT'), 
+out_types = [('grin', 'scales_yes', 'Forced Choice\n Scales with RT'),
              ('grin', 'scales_no', "Forced Choice\n Doesn't scale with RT"),
-             ('stroop', 'scales_yes', 'Stroop\n Scales with RT'), 
+             ('stroop', 'scales_yes', 'Stroop\n Scales with RT'),
              ('stroop', 'scales_no', "Stroop\n Doesn't scale with RT")]
 for row in range(len(out_types)):
     for col in range(len(isi_labels)):
@@ -97,40 +102,41 @@ for row in range(len(out_types)):
         unmod_data = vars()[out_name_unmod]
         sim_type = f'dv_{scale_settings}'
         if scale_settings == 'scales_yes':
-            correlation= \
+            correlation =\
               rtmod_data[isi_settings]['cor_est_scales_yes_filt_yes']
         else:
-            correlation= \
+            correlation = \
               unmod_data[isi_settings]['cor_est_scales_no_filt_yes']
         line1, = axs[row+1, col].plot(
-                     correlation, 
-                     rtmod_data[isi_settings][sim_type]['RT Duration only'], 
-                     'tab:blue', label = 'RT duration')
+                     correlation,
+                     rtmod_data[isi_settings][sim_type]['RT Duration only'],
+                     'tab:blue', label='RT duration')
         line2, = axs[row+1, col].plot(
-                    correlation, 
-                    unmod_data[isi_settings][sim_type]['Impulse Duration'], 
-                    'tab:green', label = 'Const (Impulse*)') 
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Impulse Duration'],
+                    'tab:green', label='Const (Impulse*)')
         line3,  = axs[row+1, col].plot(
-                    correlation, 
-                    unmod_data[isi_settings][sim_type]['Stimulus Duration'], 
-                    color='tab:purple', label = 'Const (Stimulus Duration*)')
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Stimulus Duration'],
+                    color='tab:purple', label='Const (Stimulus Duration*)')
         line4,  = axs[row+1, col].plot(
-                    correlation, 
-                    unmod_data[isi_settings][sim_type]['Mean RT Duration'], 
-                    color='tab:red', label = 'Const (Mean RT Duration*)')
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Mean RT Duration'],
+                    color='tab:red', label='Const (Mean RT Duration*)')
         line5,  = axs[row+1, col].plot(
-                    correlation, 
-                    unmod_data[isi_settings][sim_type]['No RT effect'], 
-                    color='tab:olive', label = 'Const (Stimulus Duration)')
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['No RT effect'],
+                    color='tab:olive', label='Const (Stimulus Duration)')
         axs[row+1, col].set_title(plot_label)
 for i, ax in enumerate(axs.flatten()[:3]):
     ax.axis("off")
     ax.set_title(f'ISI=U{isi_labels[i]}', fontweight='bold', fontsize=15)
 fig.subplots_adjust(hspace=.5, bottom=0.1)
 fig.tight_layout()
-plt.legend(handles=[line1, line2, line3, line4, line5], 
-          loc='center right', bbox_to_anchor=(1.32, .5), 
-          ncol=1)
-plt.savefig("/Users/jeanettemumford/Desktop/draft_single_power.pdf",
-            format='pdf', transparent=True, pad_inches=.1, bbox_inches='tight')
+plt.legend(handles=[line1, line2, line3, line4, line5],
+           loc='center right', bbox_to_anchor=(1.32, .5),
+           ncol=1)
+figpath = "/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/single_sub_power.pdf"
+plt.savefig(figpath, format='pdf', transparent=True, pad_inches=.1,
+            bbox_inches='tight')
 plt.show()
