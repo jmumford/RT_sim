@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-# import sys
-# sys.path.insert(1, 
-#       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
-#import scipy.stats
+import sys
+sys.path.insert(1, 
+       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
+import scipy.stats
 import matplotlib.pyplot as plt
 import numpy as np
 from functions import calc_win_sub_pow_range
@@ -33,8 +33,7 @@ center_rt = True
 win_sub_noise_sd_range_scales_yes = [1.2, 1.75,  3, 4, 10]
 win_sub_noise_sd_range_scales_no = [.25,  .35, .5,  .75, 3]
 
-nsim_pow = 5000
-hp_filter = False
+nsim_pow = 100
 ISI_min_max_vec = [(1, 3), (2, 5), (3, 6), (4, 7)]
 
 mu_expnorm = mu_grinband_shift
@@ -86,7 +85,7 @@ fig.add_subplot(111, frameon=False)
 plt.tick_params(labelcolor='none', which='both', top=False, bottom=False,
                 left=False, right=False)
 plt.xlabel("Effect size (correlation)", fontsize=20)
-plt.ylabel("Power (within-subject)", fontsize=20)
+plt.ylabel("Power (within-subject)", fontsize=20 , labelpad = 20)
 plt.setp(axs, xlim=(0.05, .3))
 out_types = [('grin', 'scales_yes', 'Forced Choice\n Scales with RT'),
              ('grin', 'scales_no', "Forced Choice\n Doesn't scale with RT"),
@@ -110,35 +109,37 @@ for row in range(len(out_types)):
             correlation = \
               unmod_data[isi_settings]['cor_est_scales_no_filt_yes']
         line1, = axs[row+1, col].plot(
-                     correlation,
-                     rtmod_data[isi_settings][sim_type]['RT Duration only'],
-                     'tab:blue', label='RT duration')
-        line2, = axs[row+1, col].plot(
                     correlation,
                     unmod_data[isi_settings][sim_type]['Impulse Duration'],
                     'tab:green', label='Const (Impulse*)')
-        line3,  = axs[row+1, col].plot(
+        line2,  = axs[row+1, col].plot(
                     correlation,
                     unmod_data[isi_settings][sim_type]['Stimulus Duration'],
                     color='tab:purple', label='Const (Stimulus Duration*)')
-        line4,  = axs[row+1, col].plot(
+        line3,  = axs[row+1, col].plot(
                     correlation,
                     unmod_data[isi_settings][sim_type]['Mean RT Duration'],
                     color='tab:red', label='Const (Mean RT Duration*)')
+        line4, = axs[row+1, col].plot(
+                     correlation,
+                     rtmod_data[isi_settings][sim_type]['RT Duration only'],
+                     'tab:blue', label='RT duration')
         line5,  = axs[row+1, col].plot(
                     correlation,
                     unmod_data[isi_settings][sim_type]['No RT effect'],
                     color='tab:olive', label='Const (Stimulus Duration)')
         axs[row+1, col].set_title(plot_label)
+        axs[row+1, col].grid(True)
+        axs[row+1, col].set_yticks(np.linspace(0, 1, 5))
 for i, ax in enumerate(axs.flatten()[:3]):
     ax.axis("off")
     ax.set_title(f'ISI=U{isi_labels[i]}', fontweight='bold', fontsize=15)
 fig.subplots_adjust(hspace=.5, bottom=0.1)
 fig.tight_layout()
 plt.legend(handles=[line1, line2, line3, line4, line5],
-           loc='center right', bbox_to_anchor=(1.32, .5),
+           loc='center right', bbox_to_anchor=(1.38, .5),
            ncol=1)
-figpath = "/Users/jeanettemumford/sherlock_home/RT_sims/Output/single_sub_power.pdf"
+figpath = "/Users/jeanettemumford/Desktop/single_sub_power_test.pdf"
 plt.savefig(figpath, format='pdf', transparent=True, pad_inches=.1,
             bbox_inches='tight')
 

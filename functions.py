@@ -358,8 +358,8 @@ def est_win_sub_mod_sd(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
             win_sub_var_est[model_name] = np.linalg.inv(model_mtx.T.dot(model_mtx))[1, 1]
         rt_dur_des_sd.append(np.sqrt(win_sub_var_est['RT Duration only']))
         zero_dur_des_sd.append(np.sqrt(win_sub_var_est['Impulse Duration']))
-        output = {'des_sd_rt_dur': np.mean(rt_dur_des_sd), 
-                  'des_sd_zero_dur': np.mean(zero_dur_des_sd)}
+        output = {'dv_scales_yes': np.mean(rt_dur_des_sd), 
+                  'dv_scales_no': np.mean(zero_dur_des_sd)}
     return(output)
 
 
@@ -516,7 +516,7 @@ def calc_win_sub_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
 
 
 def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power, 
-                    sim_type='dv_scales_yes',zoom=False):
+                    sim_type='dv_scales_yes',zoom=False, display_plots=True):
     isi_labels = list(output_unmod_beta_power.keys())
     nrows_plot = 2
     ncols_plot = len(isi_labels)//2
@@ -584,14 +584,20 @@ def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power,
                line9, line10], 
               loc='center right', bbox_to_anchor=(panel_col+.7, panel_row/2), 
               ncol=1)
-    plt.show()
+    if display_plots == True:
+        plt.show()
 
 
 def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot, 
                     mu_expnorm, lam_expnorm, sigma_expnorm, ISI_min, ISI_max, 
                     win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no, 
                     btwn_sub_noise_sd_scales_yes, btwn_sub_noise_sd_scales_no, 
-                    nsub, nsim, beta_scales_yes, beta_scales_no, hp_filter):
+                    nsub, nsim, beta_scales_yes, beta_scales_no, hp_filter,
+                    fig_dir, display_plots=True):
+    fig_dir = Path(fig_dir)
+    if fig_dir.exists() == False | fig_dir.is_dir() == False:
+        print("Figure directory does not exist")
+        return
     unmodulated_scales_yes = \
         pd.DataFrame(unmod_cor_with_rt_corplot['dv_scales_yes'])
     unmodulated_scales_yes['True Signal'] = 'Scales with RT'
@@ -613,6 +619,7 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
     rtmod_long['Lower Level Estimate'] = 'RT modulation'
 
     dat_long = pd.concat([rtmod_long, unmod_long])
+    dat_long = dat_long.loc[dat_long['variable'] != 'Fixed/RT Duration (orth)']
     dat_long['Lower Level Estimate'] = \
                           dat_long['Lower Level Estimate'].astype('category')
     dat_long['Lower Level Estimate'] = \
@@ -623,17 +630,16 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
         dat_long['variable'].astype('category')          
     dat_long['variable'] = \
         dat_long['variable'].cat.reorder_categories(\
-                 ['Fixed/RT Duration (orth)',
-                  'Stimulus Duration',
-                  'Impulse Duration',
+                 ['Impulse Duration',
+                 'Stimulus Duration', 
                   'Mean RT Duration',
                   'RT Duration only',
                   'No RT effect'])
     cor_t_cutoff = abs(t.ppf(.025, nsub))
     cor_cutoff = cor_t_cutoff/(nsub - 2 +cor_t_cutoff**2)**.5
-
     sns.set_theme(style="whitegrid", font_scale=2)
-    g = sns.catplot(data = dat_long, x='variable', y='value',
+    g = sns.catplot(data = dat_long,
+                x='variable', y='value',
                 hue='True Signal', row='Lower Level Estimate', kind='violin',
                 palette='gray',  aspect = 5, height =4)
     g.set_ylabels('Correlation',size=30)
@@ -647,11 +653,10 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
         ax.axhline(-1*cor_cutoff, linestyle='dashed', color='gray')
         ax.set_title(titles[count])
     plt.subplots_adjust(hspace=.5)
-    fig_root = \
-    Path('/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Figures/')
-    plt.savefig(f"{fig_root}/rt_cor_plot_mu_{round(mu_expnorm, 2)}_laminv_{round(1/lam_expnorm, 2)}_sig_{round(sigma_expnorm, 2)}_isi_{ISI_min}_{ISI_max}_sw_scalesyes_no{win_sub_noise_sd_scales_yes}_{win_sub_noise_sd_scales_no}_sb_yes_no{btwn_sub_noise_sd_scales_yes}_{btwn_sub_noise_sd_scales_no}_nsub{nsub}_byes{beta_scales_yes}_bno{beta_scales_no}_hpfilt_{hp_filter}.pdf",
+    plt.savefig(f"{fig_dir}/rt_cor_plot_mu_{round(mu_expnorm, 2)}_laminv_{round(1/lam_expnorm, 2)}_sig_{round(sigma_expnorm, 2)}_isi_{ISI_min}_{ISI_max}_sw_scalesyes_no{win_sub_noise_sd_scales_yes}_{win_sub_noise_sd_scales_no}_sb_yes_no{btwn_sub_noise_sd_scales_yes}_{btwn_sub_noise_sd_scales_no}_nsub{nsub}_byes{beta_scales_yes}_bno{beta_scales_no}_hpfilt_{hp_filter}.pdf",
             format='pdf', transparent=True, pad_inches=.5, bbox_inches='tight')
-    plt.show()
+    if display_plots == True:
+        plt.show()
     
 
 def sim_one_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
@@ -775,18 +780,46 @@ def p_dict_to_power_dict(p_dict):
            pow_dict[i][j] = np.mean(pvals_loop<0.05)
     return pow_dict
 
+
+
+def calc_group_eff_size(all_sd_params, beta):
+    """
+    Calculates group effect size based on within subject model variability, 
+      within subject variability and between subject variabiity
+    """
+    sim_type = ['dv_scales_yes', 'dv_scales_no']
+    output  = dict.fromkeys(sim_type)
+    for scale_type in sim_type:
+        des_sd = all_sd_params['win_sub_mod_sd'][scale_type]
+        win_sub_noise_sd = all_sd_params['win_sub_noise_sd'][scale_type]
+        btwn_sub_noise_sd_vec = all_sd_params['btwn_noise_sd_vec'][scale_type]
+        beta_loop = beta[scale_type]
+        mfx_sd = np.sqrt((win_sub_noise_sd*des_sd)**2 + 
+                        btwn_sub_noise_sd_vec**2)
+        total_within_sd_ratio = mfx_sd/(des_sd*win_sub_noise_sd)
+        cohens_d = beta_loop/mfx_sd
+        output[scale_type] = {'total_within_sd_ratio': total_within_sd_ratio,
+                            'cohens_d': cohens_d}
+    return(output)
+
 def group_power_range_btwn_sd(n_trials, scan_length, repetition_time, 
               mu_expnorm, lam_expnorm, sigma_expnorm, max_rt, 
               min_rt, event_duration, ISI_min, ISI_max, 
-              win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no, 
-              btwn_sub_noise_sd_vec_scales_yes, btwn_sub_noise_sd_vec_scales_no,
-              nsub, nsim, center_rt, beta_scales_yes, beta_scales_no, 
-              hp_filter):
+              all_sd_params, nsub, nsim, center_rt, beta, 
+              hp_filter, fig_dir, display_plots=True):
     """
     Calculates power over a range of between-subject SD's
     Plots correlataions with RT in violin plots
     Returns power values
     """
+    fig_dir_path = Path(fig_dir)
+    if fig_dir_path.exists() == False | fig_dir_path.is_dir() == False:
+        print("Figure directory does not exist")
+        return
+    btwn_sub_noise_sd_vec_scales_yes = \
+        all_sd_params['btwn_noise_sd_vec']['dv_scales_yes']
+    btwn_sub_noise_sd_vec_scales_no = \
+        all_sd_params['btwn_noise_sd_vec']['dv_scales_no']
     if len(btwn_sub_noise_sd_vec_scales_yes) != \
                          len(btwn_sub_noise_sd_vec_scales_no):
         print("btwn_sub_noise_sd_vec_scales_yes/no must have same lengths")
@@ -798,83 +831,192 @@ def group_power_range_btwn_sd(n_trials, scan_length, repetition_time,
             sim_many_group(n_trials, scan_length, repetition_time, 
                 mu_expnorm, lam_expnorm, sigma_expnorm, max_rt, 
                 min_rt, event_duration, ISI_min, ISI_max, 
-                win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no,
+                all_sd_params['win_sub_noise_sd']['dv_scales_yes'],
+                all_sd_params['win_sub_noise_sd']['dv_scales_no'],
                 btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind],
                 btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind], nsub, nsim, 
-                center_rt, beta_scales_yes, beta_scales_no, hp_filter)
+                center_rt, beta['dv_scales_yes'], beta['dv_scales_no'], hp_filter)
         power_unmod_1sampt_all.append(unmod_1sampt_pow)
         power_rtmod_1sampt_all.append(rtmod_1sampt_pow)
         print(f"Scales yes between-subject SD = {btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind]}\n")
         print(f"Scales no between-subject SD = {btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind]}\n")
         plot_cor_violin(unmod_cor_rt, rtmod_cor_rt, 
                     mu_expnorm, lam_expnorm, sigma_expnorm, ISI_min, ISI_max, 
-                    win_sub_noise_sd_scales_yes, win_sub_noise_sd_scales_no,
+                    all_sd_params['win_sub_noise_sd']['dv_scales_yes'],
+                    all_sd_params['win_sub_noise_sd']['dv_scales_no'],
                     btwn_sub_noise_sd_vec_scales_yes[btwn_sub_sd_ind],
                     btwn_sub_noise_sd_vec_scales_no[btwn_sub_sd_ind], nsub, nsim, 
-                    beta_scales_yes, beta_scales_no, hp_filter)
+                    beta['dv_scales_yes'], beta['dv_scales_no'], hp_filter,
+                    fig_dir, display_plots)
     power_unmod_1sampt_output = \
         list_dicts_to_dict_tuples(power_unmod_1sampt_all)
     power_rtmod_1sampt_output = \
         list_dicts_to_dict_tuples(power_rtmod_1sampt_all)
-    return power_unmod_1sampt_output, power_rtmod_1sampt_output  
+    output = calc_group_eff_size(all_sd_params, beta)
+    output['dv_scales_yes']['power_rtmod_1sampt'] =  power_rtmod_1sampt_output['dv_scales_yes']
+    output['dv_scales_yes']['power_unmod_1sampt'] =  power_unmod_1sampt_output['dv_scales_yes']
+    output['dv_scales_no']['power_rtmod_1sampt'] =  power_rtmod_1sampt_output['dv_scales_no']
+    output['dv_scales_no']['power_unmod_1sampt'] =  power_unmod_1sampt_output['dv_scales_no']
+    return output  
 
 
-def power_plot_group(unmod_output_power, rtmod_output_power, total_to_within_sd_ratio, sim_type='dv_scales_yes',
-                    zoom=False):
-    #fig, axs = plt.subplots(1, 1, sharex=True, sharey=True)
-    fig = plt.figure()
-    axs = plt.subplot(111, frameon=False)
-    #fig.add_subplot(111, frameon=False)
-    #plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
-    plt.xlabel("Total SD/within-subject SD")
-    plt.ylabel("Power")
+#I do not like the following two functions as they require the use of 
+# global variables, but it won't work otherwise.  Used to generate 
+# secondary x-axis in plot.
+
+def cohen_to_sdratio(x):
+    return np.interp(-1*x, -1*cohens_d, total_to_within_sd_ratio)
+
+
+def sdratio_to_cohen(x):
+    return np.interp(x, total_to_within_sd_ratio, cohens_d)
+
+
+def power_plot_group(power_output, fig_dir, 
+                     zoom=False, show_rt_mod=False, display_plots=True):
+    """
+    """
+    fig_dir_path = Path(fig_dir)
+    if fig_dir_path.exists() == False | fig_dir_path.is_dir() == False:
+        print("error: Figure directory does not exist or is not a directory, check path")
+        return
+    fig, axs = plt.subplots(2, sharex=True, sharey=True,
+                            figsize=(9.5, 9))
+    fig.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.grid(False)
+    #plt.xlabel("Total SD/within-subject SD")
+    plt.xlabel("Cohen's D")
+    plt.ylabel("Power (group)", labelpad = 20)
     if zoom!=False:
         plt.setp(axs, xlim=zoom)
+    for idx, scale_type in enumerate(["dv_scales_yes", "dv_scales_no"]):
+        total_to_within_sd_ratio = power_output[scale_type]['total_within_sd_ratio']
+        cohens_d = power_output[scale_type]['cohens_d']
+        if scale_type == 'dv_scales_yes':
+            plot_label = "Scales with RT"
+        else:
+            plot_label = "Doesn't scale with RT"
+        axs[idx].set_title(f"Forced Choice\n{plot_label}", pad = 20)
+        secax = axs[idx].secondary_xaxis('top', functions=(cohen_to_sdratio, sdratio_to_cohen))
+        secax.set_xlabel('Total SD/within-subject SD', fontsize=10)
+        secax.tick_params(labelsize=10)
+        axs[idx].grid(True)
+        axs[idx].set_yticks(np.linspace(0, 1, 6))
+        line1, = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_unmod_1sampt']['Impulse Duration'],
+                    'tab:green', label = 'Const (Impulse*)') 
+        line2,  = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_unmod_1sampt']['Stimulus Duration'], 
+                    color='tab:purple', label = 'Const (Stimulus Duration*)')
+        line3,  = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_unmod_1sampt']['Mean RT Duration'], 
+                    color='tab:red', label = 'Const (Mean RT Duration*)')
+        line4, = axs[idx].plot(
+                     cohens_d, 
+                     output[scale_type]['power_rtmod_1sampt']['RT Duration only'], 
+                     'tab:blue', label = 'RT duration')
+        line5,  = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_unmod_1sampt']['No RT effect'], 
+                    color='tab:olive', label = 'Const (Stimulus Duration)')
+        if show_rt_mod == True:
+            line1b, = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_rtmod_1sampt']['Impulse Duration'],
+                    'tab:green', linestyle = 'dashed',
+                    label = 'RT Modulated (Impulse*)') 
+            line2b,  = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_rtmod_1sampt']['Stimulus Duration'], 
+                    color='tab:purple', linestyle = 'dashed',
+                    label = 'RT Modulated (Stimulus Duration*)')
+            line3b,  = axs[idx].plot(
+                    cohens_d, 
+                    output[scale_type]['power_rtmod_1sampt']['Mean RT Duration'], 
+                    color='tab:red', linestyle = 'dashed',
+                    label = 'RT Modulated (Mean RT Duration*)')
+    fig.subplots_adjust(hspace=.5, bottom=0.1)
+    fig.tight_layout()
+    if show_rt_mod == False:
+        plt.legend(handles=[line1, line2, line3, line4, line5], 
+              loc='center right', bbox_to_anchor=(1.75, .5), ncol=1)
+    else:
+        plt.legend(handles=[line1, line1b, line2, line2b, line3, line3b,
+              line4, line5], 
+              loc='center right', bbox_to_anchor=(1.95, .5), ncol=1)
+    if show_rt_mod == True:
+        fig_file = f"{fig_dir}/group_power_with_modulated_regressors.pdf"
+    else:
+        fig_file = f"{fig_dir}/group_power_only_unmodulated_regressors.pdf"
+    plt.savefig(fig_file,
+            format='pdf', transparent=True, pad_inches=.5, bbox_inches='tight')
+    if display_plots == True:
+        plt.show()
+
+
+def diff_power_plot_group(unmod_output_power, rtmod_output_power, total_to_within_sd_ratio, figpath, sim_type='dv_scales_yes',
+                    zoom=False, display_plots=True):
+    fig = plt.figure()
+    axs = plt.subplot(111, frameon=False)
+    loc = plticker.MultipleLocator(base=.1) # this locator puts ticks at regular intervals
+    axs.yaxis.set_major_locator(loc)
+    plt.xlabel("Total SD/within-subject SD")
+    plt.ylabel("Power Difference")
+    if zoom!=False:
+        plt.setp(axs, xlim=zoom)
+    if sim_type == 'dv_scales_yes':
+        true_power = np.array(rtmod_output_power[sim_type]['RT Duration only'])
+    else:
+        true_power = np.array(unmod_output_power[sim_type]['No RT effect'])
     line1, = axs.plot(
                      total_to_within_sd_ratio, 
-                     rtmod_output_power[sim_type]['RT Duration only'], 
+                     true_power - rtmod_output_power[sim_type]['RT Duration only'], 
                      'tab:blue', label = 'RT duration')
     line2, = axs.plot(
                     total_to_within_sd_ratio, 
-                    unmod_output_power[sim_type]['Impulse Duration'], 
+                    true_power - np.array(unmod_output_power[sim_type]['Impulse Duration']), 
                     'tab:green', label = 'Const (impulse)') 
     line3,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    rtmod_output_power[sim_type]['Impulse Duration'], 
+                    true_power - np.array(rtmod_output_power[sim_type]['Impulse Duration']), 
                     'tab:green', linestyle = 'dashed', label = 'RT modulated (impulse)')
     line4, = axs.plot(
                     total_to_within_sd_ratio, 
-                    unmod_output_power[sim_type]['Fixed/RT Duration (orth)'], 
+                    true_power - np.array(unmod_output_power[sim_type]['Fixed/RT Duration (orth)']), 
                     color='tab:orange', label = 'Const (stimulus duration)') 
     line5,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    rtmod_output_power[sim_type]['Fixed/RT Duration (orth)'], 
+                    true_power - np.array(rtmod_output_power[sim_type]['Fixed/RT Duration (orth)']), 
                     color='tab:orange',linestyle='dashed', label = 'Orthogonalized RT duration')
     line6,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    unmod_output_power[sim_type]['Stimulus Duration'], 
+                    true_power - np.array(unmod_output_power[sim_type]['Stimulus Duration']), 
                     color='tab:purple', label = 'Const (stimulus duration)')
     line7,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    rtmod_output_power[sim_type]['Stimulus Duration'], 
+                    true_power - np.array(rtmod_output_power[sim_type]['Stimulus Duration']), 
                     color='tab:purple',linestyle='dashed', label = 'RT modulated (stimulus duration)')
     line8,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    unmod_output_power[sim_type]['Mean RT Duration'], 
+                    true_power - np.array(unmod_output_power[sim_type]['Mean RT Duration']), 
                     color='tab:red', label = 'Const (Mean RT duration)')
     line9,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    rtmod_output_power[sim_type]['Mean RT Duration'], 
+                    true_power - np.array(rtmod_output_power[sim_type]['Mean RT Duration']), 
                     color='tab:red',linestyle='dashed', label = 'RT modulated (mean RT duration)')
     line10,  = axs.plot(
                     total_to_within_sd_ratio, 
-                    unmod_output_power[sim_type]['No RT effect'], 
+                    true_power - np.array(unmod_output_power[sim_type]['No RT effect']), 
                     color='tab:olive', label = 'Const (stimulus duration)')
-        #axs[panel_row, panel_col].set_xscale('log') 
-    #axs[panel_row, panel_col].set_title(f'ISI=U{isi_labels[i]}')
     fig.tight_layout()
-    #plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, line9, line10], 
-    #           loc='center right', bbox_to_anchor=(panel_col+1.9, panel_row/2+1), ncol=1)
     plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, line9, line10], 
               loc='center right', bbox_to_anchor=(2.5, 1/2), ncol=1)
-    plt.show()
+    plt.savefig(figpath,
+            format='pdf', transparent=True, pad_inches=.5, bbox_inches='tight')
+    if display_plots == True:
+        plt.show()
+
