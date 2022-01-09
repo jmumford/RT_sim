@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.insert(1, 
-       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
+#sys.path.insert(1, 
+#       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
 import scipy.stats
 import matplotlib.pyplot as plt
 import numpy as np
 from functions import calc_win_sub_pow_range
 from scipy.stats import gamma, exponnorm
+
+file_path = '/home/users/jmumford/RT_sims/Output/outputfile.txt'
+sys.stdout = open(file_path, "w")
+
+print('getting started')
 
 rt_grinband_shift = gamma.rvs(a=1.7, loc=.5, scale=.49, size=10000)
 shape_grinband_shift, mu_grinband_shift, sigma_grinband_shift =\
@@ -33,7 +38,7 @@ center_rt = True
 win_sub_noise_sd_range_scales_yes = [1.2, 1.75,  3, 4, 10]
 win_sub_noise_sd_range_scales_no = [.25,  .35, .5,  .75, 3]
 
-nsim_pow = 100
+nsim_pow = 50
 ISI_min_max_vec = [(1, 3), (2, 5), (3, 6), (4, 7)]
 
 mu_expnorm = mu_grinband_shift
@@ -73,6 +78,8 @@ output_unmod_beta_power_grin = output_unmod_beta_power_grin_hp_yes
 output_rtmod_beta_power_grin = output_rtmod_beta_power_grin_hp_yes
 output_unmod_beta_power_stroop = output_unmod_beta_power_stroop_hp_yes
 output_rtmod_beta_power_stroop = output_rtmod_beta_power_stroop_hp_yes
+
+print('making figure')
 
 isi_labels = list(output_unmod_beta_power_grin.keys())
 isi_labels = isi_labels[0:3]
@@ -139,7 +146,7 @@ fig.tight_layout()
 plt.legend(handles=[line1, line2, line3, line4, line5],
            loc='center right', bbox_to_anchor=(1.38, .5),
            ncol=1)
-figpath = "/Users/jeanettemumford/Desktop/single_sub_power_test.pdf"
+figpath = "/home/users/jmumford/RT_sims/Output/single_sub_power_test.pdf"
 plt.savefig(figpath, format='pdf', transparent=True, pad_inches=.1,
             bbox_inches='tight')
 

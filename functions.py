@@ -864,6 +864,8 @@ def group_power_range_btwn_sd(n_trials, scan_length, repetition_time,
 # global variables, but it won't work otherwise.  Used to generate 
 # secondary x-axis in plot.
 
+cohens_d = 1
+total_to_within_sd_ratio = 1
 def cohen_to_sdratio(x):
     return np.interp(-1*x, -1*cohens_d, total_to_within_sd_ratio)
 
@@ -898,45 +900,45 @@ def power_plot_group(power_output, fig_dir,
         else:
             plot_label = "Doesn't scale with RT"
         axs[idx].set_title(f"Forced Choice\n{plot_label}", pad = 20)
-        secax = axs[idx].secondary_xaxis('top', functions=(cohen_to_sdratio, sdratio_to_cohen))
-        secax.set_xlabel('Total SD/within-subject SD', fontsize=10)
-        secax.tick_params(labelsize=10)
+        #secax = axs[idx].secondary_xaxis('top', functions=(cohen_to_sdratio, sdratio_to_cohen))
+        #secax.set_xlabel('Total SD/within-subject SD', fontsize=10)
+        #secax.tick_params(labelsize=10)
         axs[idx].grid(True)
         axs[idx].set_yticks(np.linspace(0, 1, 6))
         line1, = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_unmod_1sampt']['Impulse Duration'],
+                    power_output[scale_type]['power_unmod_1sampt']['Impulse Duration'],
                     'tab:green', label = 'Const (Impulse*)') 
         line2,  = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_unmod_1sampt']['Stimulus Duration'], 
+                    power_output[scale_type]['power_unmod_1sampt']['Stimulus Duration'], 
                     color='tab:purple', label = 'Const (Stimulus Duration*)')
         line3,  = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_unmod_1sampt']['Mean RT Duration'], 
+                    power_output[scale_type]['power_unmod_1sampt']['Mean RT Duration'], 
                     color='tab:red', label = 'Const (Mean RT Duration*)')
         line4, = axs[idx].plot(
                      cohens_d, 
-                     output[scale_type]['power_rtmod_1sampt']['RT Duration only'], 
+                     power_output[scale_type]['power_rtmod_1sampt']['RT Duration only'], 
                      'tab:blue', label = 'RT duration')
         line5,  = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_unmod_1sampt']['No RT effect'], 
+                    power_output[scale_type]['power_unmod_1sampt']['No RT effect'], 
                     color='tab:olive', label = 'Const (Stimulus Duration)')
         if show_rt_mod == True:
             line1b, = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_rtmod_1sampt']['Impulse Duration'],
+                    power_output[scale_type]['power_rtmod_1sampt']['Impulse Duration'],
                     'tab:green', linestyle = 'dashed',
                     label = 'RT Modulated (Impulse*)') 
             line2b,  = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_rtmod_1sampt']['Stimulus Duration'], 
+                    power_output[scale_type]['power_rtmod_1sampt']['Stimulus Duration'], 
                     color='tab:purple', linestyle = 'dashed',
                     label = 'RT Modulated (Stimulus Duration*)')
             line3b,  = axs[idx].plot(
                     cohens_d, 
-                    output[scale_type]['power_rtmod_1sampt']['Mean RT Duration'], 
+                    power_output[scale_type]['power_rtmod_1sampt']['Mean RT Duration'], 
                     color='tab:red', linestyle = 'dashed',
                     label = 'RT Modulated (Mean RT Duration*)')
     fig.subplots_adjust(hspace=.5, bottom=0.1)
