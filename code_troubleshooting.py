@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 sys.path.insert(1, 
        '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
@@ -8,9 +10,12 @@ from functions import *
 from scipy.stats import gamma, exponnorm
 import time 
 from nilearn.glm.first_level.design_matrix import _cosine_drift
-import pingouin as pg
 
+file_path = '/home/users/jmumford/RT_sims/Output/outputfile.txt'
+sys.stdout = open(file_path, "w")
 
+print('getting started')
+sys.stdout.flush()
 rt_grinband_shift = gamma.rvs(a=1.7, loc=.5, scale=.49, size=10000)
 shape_grinband_shift, mu_grinband_shift, sigma_grinband_shift =\
      exponnorm.fit(rt_grinband_shift*1000)
@@ -47,7 +52,7 @@ hp_filter = True
 
 
 
-nsim_check = 1000
+nsim_check = 200000
 ISI_min = 3
 ISI_max = 6
 sd_ind = 1
@@ -57,6 +62,7 @@ for i in range(nsim_check):
         print(i)
         print(start_time - time.time())
         start_time = time.time()
+        sys.stdout.flush()
     regressors, _ = make_regressors_one_trial_type(n_trials, scan_length, 
                                    repetition_time, mu_expnorm, 
                                    lam_expnorm, sigma_expnorm,
