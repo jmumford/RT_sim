@@ -11,7 +11,7 @@ from scipy.stats import gamma, exponnorm
 import time 
 from nilearn.glm.first_level.design_matrix import _cosine_drift
 
-file_path = '/home/users/jmumford/RT_sims/Output/outputfile.txt'
+file_path = './outputfile.txt'
 sys.stdout = open(file_path, "w")
 
 print('getting started')
