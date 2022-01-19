@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 
 import sys
-#sys.path.insert(1, 
-#       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
+sys.path.insert(1, 
+       '/Users/jeanettemumford/Dropbox/Research/Projects/RT_sims/Code')
 import scipy.stats
 import matplotlib.pyplot as plt
 import numpy as np
 from functions import calc_win_sub_pow_range
 from scipy.stats import gamma, exponnorm
 
-file_path = '/home/users/jmumford/RT_sims/Output/outputfile.txt'
-sys.stdout = open(file_path, "w")
+#file_path = '/home/users/jmumford/RT_sims/Output/outputfile.txt'
+#sys.stdout = open(file_path, "w")
 
 print('getting started')
 

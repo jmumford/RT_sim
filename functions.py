@@ -29,7 +29,8 @@ def make_regressors_one_trial_type(n_trials, scan_length,
                                    repetition_time=1, mu_expnorm=600,
                                    lam_expnorm=1 / 100, sigma_expnorm=75,
                                    max_rt=2000, min_rt=0, event_duration=2, 
-                                   ISI_min=2, ISI_max=5, center_rt=True):
+                                   ISI_min=2, ISI_max=5, center_rt=True, 
+                                   rt_diff_s = 500):
     """Generate regressors for one trial type samping response times from
     ex-Gaussian distribution.  7 regressors, total, are generated based on
     different popular modeling options used for trials that vary in duration by
@@ -79,13 +80,16 @@ def make_regressors_one_trial_type(n_trials, scan_length,
     # - this assumes sigma_subject and sigma_trial are equal, probably wrong
     # - because samples may sometimes fall outside of min/max, we generate
     # twice as many as we need, filter for min/max, and then take the number
-    # we actually need   
+    # we actually need  
+    if n_trials%2 != 0:
+        print("Error: Please use an even number of trials")
+        return 
     shape_expnorm = 1 / (sigma_expnorm * lam_expnorm)
-    subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
-                                                sigma_expnorm, 1) - \
-                                                1 / lam_expnorm
     sim_num_trials = 0
     while sim_num_trials < n_trials:
+        subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
+                                                sigma_expnorm, 1) - \
+                                                1 / lam_expnorm
         rt_trials_twice_what_needed = exponnorm.rvs(shape_expnorm,
                                                 subject_specific_mu_expnorm,
                                                 sigma_expnorm, n_trials * 2) 
@@ -97,93 +101,77 @@ def make_regressors_one_trial_type(n_trials, scan_length,
     rt_trial_mean_s = np.mean(rt_trials)
     ISI = np.random.uniform(low=ISI_min, high=ISI_max, size=n_trials - 1)
     onsets = np.cumsum(np.append([5], rt_trials[0:(n_trials-1)]+ISI))
+    n_half_trials = int(n_trials/2)
+    onsets1 = onsets[0:half_n]
+    onsets2= onsets[-half_n:]
+    rt_trials1 = rt_trials[0:half_n]
+    rt_trials2 = rt_trials[-half_n:] + rt_diff_s
+    rt_mean_stim1 = np.mean(rt_trials1)
+    rt_mean_stim2 = np.mean(rt_trials2)
     frame_times = np.arange(0, scan_length*repetition_time, repetition_time)
     if center_rt:
         amplitudes = {'modulated': (rt_trials - rt_trial_mean_s),
-                      'unmodulated': np.ones(onsets.shape)}
+                      'unmodulated': np.ones(onsets.shape),
+                      'unmodulated1': np.ones(onsets1.shape),
+                      'unmodulated2': np.ones(onsets2.shape),
+                      'modulated_minus_1s': (rt_trials - 1)}
     else:
         amplitudes = {'modulated': rt_trials,
-                      'unmodulated': np.ones(onsets.shape)}
+                      'unmodulated': np.ones(onsets.shape),
+                      'unmodulated1': np.ones(onsets1.shape),
+                      'unmodulated2': np.ones(onsets2.shape),
+                      'modulated_minus_1s': (rt_trials - 1)}
 
     durations = {'fixed_zero': np.zeros(onsets.shape),
                  'fixed_event_duration': np.zeros(onsets.shape) +
                  event_duration,
+                 'fixed_event_duration1': np.zeros(onsets1.shape) +
+                 event_duration,
+                 'fixed_event_duration2': np.zeros(onsets2.shape) +
+                 event_duration,
                  'fixed_mean_rt': np.zeros(onsets.shape) + 
                 rt_trial_mean_s,
-                 'rt': rt_trials}
+                 'rt': rt_trials,
+                 'rt_orth': rt_trials}
     
     regressors = {key: {key2: {} for key2 in amplitudes} for key in durations}
 
     for duration_type, duration in durations.items():
         for modulation_type, amplitude in amplitudes.items():
-            onsets_3col = make_3column_onsets(onsets, duration, amplitude)
-            regressors[duration_type][modulation_type], _ = \
+            if duration_type == 'rt_orth' and modulation_type == 'unmodulated':
+                onsets_3col = make_3column_onsets(onsets, duration, amplitude)
+                non_orth_dur_rt, _ = hemodynamic_models.compute_regressor(
+                      onsets_3col, 'spm', frame_times, oversampling=16)
+                contrasts = np.array([[1]])
+                dur_stim_unmod = \
+                    regressors['fixed_event_duration']['unmodulated']
+                _, _, _, predy, _, _ = runreg(non_orth_dur_rt, 
+                                    dur_stim_unmod, 
+                                    contrasts, hp_filter=False, 
+                                    compute_stats=False)
+                regressors[duration_type][modulation_type] = \
+                                    non_orth_dur_rt - predy 
+            else:
+                onsets_3col = make_3column_onsets(onsets, duration, amplitude)
+                regressors[duration_type][modulation_type], _ = \
                       hemodynamic_models.compute_regressor(
-                      onsets_3col, 'spm', frame_times, oversampling=10)
-    return regressors, rt_trial_mean_s
+                      onsets_3col, 'spm', frame_times, oversampling=16)
+    return regressors, rt_trial_mean_s, rt_mean_stim1, rt_mean_stim2
 
 
-def make_regressors_one_trial_type_old(n_trials, scan_length,
+def make_regressors_two_trial_type(n_trials, scan_length,
                                    repetition_time=1, mu_expnorm=600,
                                    lam_expnorm=1 / 100, sigma_expnorm=75,
                                    max_rt=2000, min_rt=0, event_duration=2, 
-                                   ISI_min=2, ISI_max=5, center_rt=True):
-    """Generate regressors for one trial type samping response times from
-    ex-Gaussian distribution.  7 regressors, total, are generated based on
-    different popular modeling options used for trials that vary in duration by
-    RT across trials
-
-    Args:
-        mu_expnorm (Union[int, float])      : Mean exgaussian RT 
-                                              parameter mu(ms)
-        n_trials (int)                      : number of trials
-        scan_length (Union[int, float])     : length of scan in seconds
-        repetition_time (Union[int, float]) : repetition time for scan
-                                             (in seconds). Defaults to 1
-        lam_expnorm (float, optional)       : rate parameter for exponential.
-                                              Defaults to 1/100.
-        sigma_expnorm (int, optional)       : variance of Gaussian RT.
-                                              Defaults to 75.
-        max_rt (int, optional)              : Maximum RT value in msec.
-                                              Defaults to 2000.
-        min_rt (int, optional)              : Minimum RT value in msec.
-                                              Defaults to 0.
-        event_duration (int, optional)      : Duration of events in seconds.
-                                              Defaults to 2 secs.
-        ISI_min (Union[int, float], optional): Minimum of interstimulus
-                                              interval (s). Defaults to 2 secs.
-        ISI_max (Union[int, float], optional): Maximum of interstimulus
-                                              interval (s). Defaults to 5 secs.
-        center_rt                            : Whether or not modulated RT is 
-                                               centered. Default is True.
-    Returns:
-        regressors: Nested dictionary containing regressors with specific
-                    durations (first level) and modulations (second level)
-                    Durations, fixed_zero: Delta function (0 duration)
-                    Durations, fixed_event_duration: duration = max_rt value
-                    Durations, rt: duration = reaction time for that trial
-                    Modulations, modulated: modulation is mean centered
-                                            reaction time
-                    Modulations, unmodulated: modulation 1 for all trials
-    Notes about expnorm:
-    theoretical mean = mu_expnorm + 1/lam_expnorm
-    theoretical variance = sigma_expnorm**2 + 1/lam_expnorm**2
-    Defaults gleaned from fig 1 of "Analysis of response time data" (heathcote)
-    mus: 600-700, sigma: 50-100, lam = 1/tau where tau = 100
-
+                                   ISI_min=2, ISI_max=5, rt_diff=50, center_rt=True):
     """
-    # 2 stages to generate RT (subject mean RT -> trial RTs).
-    # NOTES:
-    # - this assumes sigma_subject and sigma_trial are equal, probably wrong
-    # - because samples may sometimes fall outside of min/max, we generate
-    # twice as many as we need, filter for min/max, and then take the number
-    # we actually need   
+    """
     shape_expnorm = 1 / (sigma_expnorm * lam_expnorm)
-    subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
-                                                sigma_expnorm, 1) - \
-                                                1 / lam_expnorm
     sim_num_trials = 0
     while sim_num_trials < n_trials:
+        subject_specific_mu_expnorm = exponnorm.rvs(shape_expnorm, mu_expnorm,
+                                                sigma_expnorm, 1) - \
+                                                1 / lam_expnorm
         rt_trials_twice_what_needed = exponnorm.rvs(shape_expnorm,
                                                 subject_specific_mu_expnorm,
                                                 sigma_expnorm, n_trials * 2) 
@@ -198,48 +186,42 @@ def make_regressors_one_trial_type_old(n_trials, scan_length,
     frame_times = np.arange(0, scan_length*repetition_time, repetition_time)
     if center_rt:
         amplitudes = {'modulated': (rt_trials - rt_trial_mean_s),
-                      'unmodulated': np.ones(onsets.shape)}
+                      'unmodulated1': np.ones(onsets1.shape),
+                      'unmodulated2': np.ones(onsets2.shape)}
     else:
         amplitudes = {'modulated': rt_trials,
-                      'unmodulated': np.ones(onsets.shape)}
+                      'unmodulated1': np.ones(onsets1.shape),
+                      'unmodulated1': np.ones(onsets2.shape)}
 
-    #durations = {'fixed_zero': np.zeros(onsets.shape),
-    #             'fixed_event_duration': np.zeros(onsets.shape) +
-    #             event_duration,
-    #             'fixed_mean_rt': np.zeros(onsets.shape) + 
-    #            rt_trial_mean_s,
-    #             'rt': rt_trials,
-    #             'rt_orth': rt_trials}
     durations = {'fixed_zero': np.zeros(onsets.shape),
                  'fixed_event_duration': np.zeros(onsets.shape) +
                  event_duration,
-                 'fixed_mean_rt': np.zeros(onsets.shape) + 
-                rt_trial_mean_s,
                  'rt': rt_trials}
     
     regressors = {key: {key2: {} for key2 in amplitudes} for key in durations}
 
     for duration_type, duration in durations.items():
         for modulation_type, amplitude in amplitudes.items():
-            #if duration_type == 'rt_orth' and modulation_type == 'unmodulated':
-            #    onsets_3col = make_3column_onsets(onsets, duration, amplitude)
-            #    non_orth_dur_rt, _ = hemodynamic_models.compute_regressor(
-            #          onsets_3col, 'spm', frame_times, oversampling=16)
-            #    contrasts = np.array([[1]])
-            #    dur_stim_unmod = \
-            #        regressors['fixed_event_duration']['unmodulated']
-            #    _, _, _, predy, _, _ = runreg(non_orth_dur_rt, 
-            #                        dur_stim_unmod, 
-            #                        contrasts, hp_filter=False, 
-            #                        compute_stats=False)
-            #    regressors[duration_type][modulation_type] = \
-            #                        non_orth_dur_rt - predy 
-            #else:
+            if duration_type == 'rt_orth' and modulation_type == 'unmodulated':
+                onsets_3col = make_3column_onsets(onsets, duration, amplitude)
+                non_orth_dur_rt, _ = hemodynamic_models.compute_regressor(
+                      onsets_3col, 'spm', frame_times, oversampling=16)
+                contrasts = np.array([[1]])
+                dur_stim_unmod = \
+                    regressors['fixed_event_duration']['unmodulated']
+                _, _, _, predy, _, _ = runreg(non_orth_dur_rt, 
+                                    dur_stim_unmod, 
+                                    contrasts, hp_filter=False, 
+                                    compute_stats=False)
+                regressors[duration_type][modulation_type] = \
+                                    non_orth_dur_rt - predy 
+            else:
                 onsets_3col = make_3column_onsets(onsets, duration, amplitude)
                 regressors[duration_type][modulation_type], _ = \
                       hemodynamic_models.compute_regressor(
                       onsets_3col, 'spm', frame_times, oversampling=16)
     return regressors, rt_trial_mean_s
+
 
 
 def runreg(y, x, contrasts, hp_filter=True, compute_stats=True):
@@ -395,6 +377,7 @@ def make_empty_dict_model_keys(numrep):
     models = {'Impulse Duration',
               'Fixed/RT Duration (orth)',
               'Stimulus Duration',
+              'Stimulus Duration (RT=1s)',
               'Mean RT Duration',
               'RT Duration only',
               'No RT effect'}
@@ -423,13 +406,17 @@ def make_design_matrices(regressors):
                     regressors['rt']['unmodulated']), axis=1)
     x_duration_event_only = np.concatenate((np.ones(regressor_shape),
                     regressors['fixed_event_duration']['unmodulated']), axis=1)
-    #x_duration_event_duration_rt_orth = np.concatenate((np.ones(regressor_shape),
-    #                regressors['fixed_event_duration']['unmodulated'],
-    #                regressors['rt_orth']['unmodulated']), axis=1)
+    x_duration_event_duration_rt_orth = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_event_duration']['unmodulated'],
+                    regressors['rt_orth']['unmodulated']), axis=1)
+    x_duration_event_duration_rt_minus1 = np.concatenate((np.ones(regressor_shape),
+                    regressors['fixed_event_duration']['unmodulated'],
+                    regressors['fixed_event_duration']['modulated_minus_1s']), axis=1)
     
     models = {'Impulse Duration': x_duration_0,
-    #          'Fixed/RT Duration (orth)': x_duration_event_duration_rt_orth,
+              'Fixed/RT Duration (orth)': x_duration_event_duration_rt_orth,
               'Stimulus Duration': x_duration_event_duration,
+              'Stimulus Duration (RT=1s)': x_duration_event_duration_rt_minus1,
               'Mean RT Duration': x_duration_mean_rt,
               'RT Duration only': x_duration_rt_only,
               'No RT effect': x_duration_event_only}
@@ -473,81 +460,6 @@ def est_win_sub_mod_sd(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     return(output)
 
 
-
-def sim_fit_sub_old(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
-              lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
-              min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, 
-              win_sub_noise_sd_scales_yes=0.1, win_sub_noise_sd_scales_no=0.1, 
-              center_rt=True, beta_scales_yes = 1, beta_scales_no = 1, 
-              hp_filter=True):
-    """Runs 3 models with two different dependent variables and estimates
-    unmodulated parameter estimate.  For 
-    first model, dependent variable is BOLD signal that scales with reaction
-    time (duration is reaction time) while dependent variable for second model
-    doesn't scale with reaction time (duration is max_rt).  
-
-    The three models each include 2 regressors and unmodulated regressor and
-    one modulated by mean centered reaction time.  The difference is the 
-    durations of the two regressors which are set to 0s, event duration (max_rt)
-    and mean of the reaction time across trials for each of the 3 models.
-
-    """
-    regressors, mean_rt = make_regressors_one_trial_type(n_trials, scan_length, 
-                                   repetition_time, mu_expnorm, 
-                                   lam_expnorm, sigma_expnorm,
-                                   max_rt, min_rt, event_duration, ISI_min, 
-                                   ISI_max, center_rt)
-    dv_scales_yes = beta_scales_yes*regressors['rt']['unmodulated'] + \
-                     np.random.normal(0, win_sub_noise_sd_scales_yes, 
-                     (scan_length, 1))
-    dv_scales_no = beta_scales_no*regressors['fixed_zero']['unmodulated']+ \
-                     np.random.normal(0, win_sub_noise_sd_scales_no, 
-                     (scan_length, 1))
-    dependent_variables = {'dv_scales_yes': dv_scales_yes,
-            'dv_scales_no': dv_scales_no}
-    models = make_design_matrices(regressors)
-
-    unmod_beta_est = make_empty_dict_model_keys(1)
-    rtmod_beta_est = make_empty_dict_model_keys(1)
-    unmod_beta_p = make_empty_dict_model_keys(1)
-    rtmod_beta_p = make_empty_dict_model_keys(1)
-    model_r2 = make_empty_dict_model_keys(1)
-    for model_name, model_mtx in models.items():
-        for dependent_variable_name, dv in dependent_variables.items():
-            if model_mtx.shape[1] == 2:
-                contrasts = np.array([[0, 1]])
-            if model_mtx.shape[1] == 3:
-                contrasts = np.array([[0, 1, 0], [0, 0, 1]])
-            con_estimates, _, p_values, _, _, r2  = runreg(dv, model_mtx, 
-                    contrasts, hp_filter, compute_stats=True)
-            model_r2[dependent_variable_name][model_name] = r2
-            if (model_mtx.shape[1] == 2) & (model_name == 'RT Duration only'):
-                unmod_beta_est[dependent_variable_name][model_name] = np.nan
-                unmod_beta_p[dependent_variable_name][model_name] = np.nan
-                rtmod_beta_est[dependent_variable_name][model_name] = \
-                    con_estimates[0]
-                rtmod_beta_p[dependent_variable_name][model_name] = p_values[0]
-            elif (model_mtx.shape[1] == 2) & (model_name == 'No RT effect'):
-                unmod_beta_est[dependent_variable_name][model_name] = \
-                    con_estimates[0]
-                unmod_beta_p[dependent_variable_name][model_name] = p_values[0]
-                rtmod_beta_est[dependent_variable_name][model_name] = np.nan
-                rtmod_beta_p[dependent_variable_name][model_name] = np.nan
-            else:
-                unmod_beta_est[dependent_variable_name][model_name] = \
-                    con_estimates[0]
-                unmod_beta_p[dependent_variable_name][model_name] = p_values[0]
-                rtmod_beta_est[dependent_variable_name][model_name] = \
-                    con_estimates[1]
-                rtmod_beta_p[dependent_variable_name][model_name] = p_values[1]
-                
-    return unmod_beta_est, rtmod_beta_est, unmod_beta_p, rtmod_beta_p, mean_rt,\
-           model_r2
-
-
-
-
-
 def sim_fit_sub(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
               lam_expnorm=1 / 100, sigma_expnorm=75, max_rt=2000, 
               min_rt=0, event_duration=2, ISI_min=2, ISI_max=5, 
@@ -580,7 +492,8 @@ def sim_fit_sub(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     dependent_variables = {'dv_scales_yes': dv_scales_yes,
             'dv_scales_no': dv_scales_no}
     models = make_design_matrices(regressors)
-    dct_basis = make_dct_basis(scan_length)
+    if hp_filter == True:
+        dct_basis = make_dct_basis(scan_length)
     unmod_beta_est = make_empty_dict_model_keys(1)
     rtmod_beta_est = make_empty_dict_model_keys(1)
     unmod_beta_p = make_empty_dict_model_keys(1)
@@ -588,11 +501,18 @@ def sim_fit_sub(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     model_r2 = make_empty_dict_model_keys(1)
     for model_name, model_mtx in models.items():
         for dependent_variable_name, dv in dependent_variables.items():
-            if model_mtx.shape[1] == 2:
-                contrasts = np.array([[0, 1]+ [0]*dct_basis.shape[1]])
-            if model_mtx.shape[1] == 3:
-                contrasts = np.array([[0, 1, 1]+ [0]*dct_basis.shape[1]])
-            model = np.concatenate((model_mtx, dct_basis), axis=1)
+            if hp_filter == True: 
+                if model_mtx.shape[1] == 2:
+                    contrasts = np.array([[0, 1]+ [0]*dct_basis.shape[1]])
+                if model_mtx.shape[1] == 3:
+                    contrasts = np.array([[0, 1, 1]+ [0]*dct_basis.shape[1]])
+                model = np.concatenate((model_mtx, dct_basis), axis=1)
+            else:
+                if model_mtx.shape[1] == 2:
+                    contrasts = np.array([[0, 1]])
+                if model_mtx.shape[1] == 3:
+                    contrasts = np.array([[0, 1, 1]])
+                model = model_mtx 
             model_setup = sm.OLS(dv, model) 
             fit = model_setup.fit()
             con_estimates = fit.params[contrasts[0] ==1]
@@ -640,77 +560,7 @@ def list_dicts_to_dict_tuples(list_of_dicts):
             out_dict[i][j] = tuple(val[i][j] for val in list_of_dicts)
     return dict(out_dict)
     
-     
-# EDIT ME!!
-def calc_win_sub_pow_range2(n_trials, scan_length, repetition_time, mu_expnorm,
-              lam_expnorm, sigma_expnorm, max_rt, 
-              min_rt, event_duration, ISI_min_max_vec,
-              win_sub_noise_sd_range_scales_yes, 
-              win_sub_noise_sd_range_scales_no,  
-              center_rt, beta_scales_yes, beta_scales_no, hp_filter, nsim_pow):
-    """Stuff
-    """
-    if len(win_sub_noise_sd_range_scales_yes) != \
-                         len(win_sub_noise_sd_range_scales_no):
-        print("win_sub_noise_sd_range_scales_yes/no must have same lengths")
-        return
-    num_sd = len(win_sub_noise_sd_range_scales_yes)
-    output_unmod_beta_power = {}
-    output_rtmod_beta_power = {}
-    for isi_loop in ISI_min_max_vec:
-        print(isi_loop)
-        output_unmod_beta_power[isi_loop] = make_empty_dict_model_keys(num_sd)
-        output_rtmod_beta_power[isi_loop] = make_empty_dict_model_keys(num_sd)
-        ISI_min = isi_loop[0]
-        ISI_max = isi_loop[1]
-        print('Running calc_cor_out')
-        calc_cor_out = calc_cor_over_noise_range(50, n_trials, scan_length, 
-                    repetition_time, mu_expnorm,lam_expnorm, sigma_expnorm, 
-                    max_rt,min_rt, event_duration, ISI_min, ISI_max, 
-                    win_sub_noise_sd_range_scales_yes, 
-                    win_sub_noise_sd_range_scales_no, 
-                    center_rt,beta_scales_yes, beta_scales_no)
-        output_unmod_beta_power[isi_loop]['cor_est_scales_no_filt_yes'] = \
-                    calc_cor_out['cor_est_scales_no_filt_yes']
-        output_rtmod_beta_power[isi_loop]['cor_est_scales_yes_filt_yes'] = \
-                    calc_cor_out['cor_est_scales_yes_filt_yes']
-        for sd_ind in range(0, num_sd):
-            unmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow)
-            rtmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow) 
-            start_time = time.time() 
-            for sim in range(0, nsim_pow):
-                if sim%1000 == 0:
-                    print(sim)
-                    print(start_time - time.time())
-                    start_time = time.time()
-                _, _, unmod_beta_p, rtmod_beta_p, _, _ = \
-                    sim_fit_sub(n_trials, scan_length, repetition_time, 
-                                mu_expnorm,lam_expnorm, sigma_expnorm, max_rt, 
-                                min_rt, event_duration, ISI_min, ISI_max, 
-                                win_sub_noise_sd_range_scales_yes[sd_ind], 
-                                win_sub_noise_sd_range_scales_no[sd_ind], 
-                                center_rt, beta_scales_yes, beta_scales_no,
-                                hp_filter)
-                for i in unmod_beta_p_vec.keys():
-                    for j in unmod_beta_p_vec[i].keys():
-                        unmod_beta_p_vec[i][j][sim] = unmod_beta_p[i][j]
-                        rtmod_beta_p_vec[i][j][sim] = rtmod_beta_p[i][j]
-
-
-                for i in unmod_beta_p_vec.keys():
-                    for j in unmod_beta_p_vec[i].keys():
-                        unmod_beta_p_vec[i][j][sim] = unmod_beta_p[i][j]
-                        rtmod_beta_p_vec[i][j][sim] = rtmod_beta_p[i][j]
-            print('calculating power')              
-            for i in unmod_beta_p_vec.keys():
-                for j in unmod_beta_p_vec[i].keys():
-                    output_unmod_beta_power[isi_loop][i][j][sd_ind] = \
-                        np.mean(np.array(unmod_beta_p_vec[i][j]) <= 0.05)
-                    output_rtmod_beta_power[isi_loop][i][j][sd_ind]=\
-                        np.mean(np.array(rtmod_beta_p_vec[i][j]) <= 0.05)       
-    return output_unmod_beta_power, output_rtmod_beta_power
-
-
+  
 
 def calc_win_sub_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
               lam_expnorm, sigma_expnorm, max_rt, 
@@ -746,12 +596,12 @@ def calc_win_sub_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
         for sd_ind in range(0, num_sd):
             unmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow)
             rtmod_beta_p_vec = make_empty_dict_model_keys(nsim_pow) 
-            start_time = time.time() 
+            #start_time = time.time() 
             for sim in range(0, nsim_pow):
-                if sim%1000 == 0:
-                    print(sim)
-                    print(start_time - time.time())
-                    start_time = time.time()
+                #if sim%1000 == 0:
+                #    print(sim)
+                #    print(start_time - time.time())
+                #    start_time = time.time()
                 _, _, unmod_beta_p, rtmod_beta_p, _, _ = \
                     sim_fit_sub(n_trials, scan_length, repetition_time, 
                                 mu_expnorm,lam_expnorm, sigma_expnorm, max_rt, 
@@ -763,8 +613,7 @@ def calc_win_sub_pow_range(n_trials, scan_length, repetition_time, mu_expnorm,
                 for i in unmod_beta_p_vec.keys():
                     for j in unmod_beta_p_vec[i].keys():
                         unmod_beta_p_vec[i][j][sim] = unmod_beta_p[i][j]
-                        rtmod_beta_p_vec[i][j][sim] = rtmod_beta_p[i][j]
-            print('calculating power')              
+                        rtmod_beta_p_vec[i][j][sim] = rtmod_beta_p[i][j]       
             for i in unmod_beta_p_vec.keys():
                 for j in unmod_beta_p_vec[i].keys():
                     output_unmod_beta_power[isi_loop][i][j][sd_ind] = \
@@ -811,12 +660,12 @@ def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power,
                     'tab:green', linestyle = 'dashed', label = 'RT modulated (impulse)')
         line4, = axs[panel_row, panel_col].plot(
                     correlation, 
-                    output_unmod_beta_power[isi_labels[i]][sim_type]['Fixed/RT Duration (orth)'], 
-                    color='tab:orange', label = 'Const (stimulus duration)') 
+                    output_unmod_beta_power[isi_labels[i]][sim_type]['Stimulus Duration (RT=1s)'], 
+                    color='tab:orange', label = 'Const (stimulus duration RT=1s)') 
         line5,  = axs[panel_row, panel_col].plot(
                     correlation, 
-                    output_rtmod_beta_power[isi_labels[i]][sim_type]['Fixed/RT Duration (orth)'], 
-                    color='tab:orange',linestyle='dashed', label = 'Orthogonalized RT duration')
+                    output_rtmod_beta_power[isi_labels[i]][sim_type]['Stimulus Duration (RT=1s)'], 
+                    color='tab:orange',linestyle='dashed', label = 'RT modulated (stimulus duration RT=1s)')
         line6,  = axs[panel_row, panel_col].plot(
                     correlation, 
                     output_unmod_beta_power[isi_labels[i]][sim_type]['Stimulus Duration'], 
@@ -841,7 +690,7 @@ def power_plot_1sub(output_unmod_beta_power, output_rtmod_beta_power,
     fig.tight_layout()
     plt.legend(handles=[line1, line2, line3, line4, line5, line6, line7, line8, 
                line9, line10], 
-              loc='center right', bbox_to_anchor=(panel_col+.7, panel_row/2), 
+              loc='center right', bbox_to_anchor=(panel_col+.75, panel_row/2), 
               ncol=1)
     if display_plots == True:
         plt.show()
@@ -890,19 +739,20 @@ def plot_cor_violin(unmod_cor_with_rt_corplot, rtmod_cor_with_rt_corplot,
     dat_long['variable'] = \
         dat_long['variable'].cat.reorder_categories(\
                  ['Impulse Duration',
-                 'Stimulus Duration', 
+                 'Stimulus Duration (RT=1s)', 
+                 'Stimulus Duration',
                   'Mean RT Duration',
                   'RT Duration only',
                   'No RT effect'])
     cor_t_cutoff = abs(t.ppf(.025, nsub))
     cor_cutoff = cor_t_cutoff/(nsub - 2 +cor_t_cutoff**2)**.5
-    sns.set_theme(style="whitegrid", font_scale=2)
+    sns.set_theme(style="whitegrid", font_scale=1.5)
     g = sns.catplot(data = dat_long,
                 x='variable', y='value',
                 hue='True Signal', row='Lower Level Estimate', kind='violin',
                 palette='gray',  aspect = 5, height =4)
-    g.set_ylabels('Correlation',size=30)
-    g.set_xlabels('',size=30, clear_inner=False)
+    g.set_ylabels('Correlation',size=20)
+    g.set_xlabels('',size=5, clear_inner=False)
     titles = [r'Cor($\hat\beta_{trial}$, $RT_{WS}$)', 
              r'Cor($\hat\beta_{RT_{BT}}$ , $RT_{WS}$)']
     for count, ax in enumerate(g.axes.flatten()):
@@ -1005,12 +855,12 @@ def sim_many_group(n_trials, scan_length, repetition_time=1, mu_expnorm=600,
     rtmod_cor_with_rt_list_dict = list()
     unmod_1samp_t_pval_list_dict = list()
     rtmod_1samp_t_pval_list_dict = list()
-    start_time = time.time()
+    #start_time = time.time()
     for sim in range(0, nsim):
-        if sim%100 == 0:
-            print(sim)
-            print(time.time() - start_time)
-            start_time = time.time()
+        #if sim%100 == 0:
+        #    print(sim)
+        #    print(time.time() - start_time)
+        #    start_time = time.time()
         unmod_cor_with_rt_loop, rtmod_cor_with_rt_loop, unmod_1samp_t_pval_loop, rtmod_1samp_t_pval_loop = \
             sim_one_group(n_trials, scan_length,repetition_time, mu_expnorm,
             lam_expnorm, sigma_expnorm, max_rt,  min_rt, event_duration, 
@@ -1175,17 +1025,21 @@ def power_plot_group(power_output, fig_dir,
                     'tab:green', label = 'Const (Impulse*)') 
         line2,  = axs[idx].plot(
                     cohens_d, 
+                    power_output[scale_type]['power_unmod_1sampt']['Stimulus Duration (RT=1s)'], 
+                    color='tab:orange', label = 'Const (Stimulus Duration*, RT=1s)')
+        line3,  = axs[idx].plot(
+                    cohens_d, 
                     power_output[scale_type]['power_unmod_1sampt']['Stimulus Duration'], 
                     color='tab:purple', label = 'Const (Stimulus Duration*)')
-        line3,  = axs[idx].plot(
+        line4,  = axs[idx].plot(
                     cohens_d, 
                     power_output[scale_type]['power_unmod_1sampt']['Mean RT Duration'], 
                     color='tab:red', label = 'Const (Mean RT Duration*)')
-        line4, = axs[idx].plot(
+        line5, = axs[idx].plot(
                      cohens_d, 
                      power_output[scale_type]['power_rtmod_1sampt']['RT Duration only'], 
                      'tab:blue', label = 'RT duration')
-        line5,  = axs[idx].plot(
+        line6,  = axs[idx].plot(
                     cohens_d, 
                     power_output[scale_type]['power_unmod_1sampt']['No RT effect'], 
                     color='tab:olive', label = 'Const (Stimulus Duration)')
@@ -1197,10 +1051,15 @@ def power_plot_group(power_output, fig_dir,
                     label = 'RT Modulated (Impulse*)') 
             line2b,  = axs[idx].plot(
                     cohens_d, 
+                    power_output[scale_type]['power_rtmod_1sampt']['Stimulus Duration (RT=1s)'], 
+                    color='tab:purple', linestyle = 'dashed',
+                    label = 'RT Modulated (Stimulus Duration*, RT=1s)')
+            line3b,  = axs[idx].plot(
+                    cohens_d, 
                     power_output[scale_type]['power_rtmod_1sampt']['Stimulus Duration'], 
                     color='tab:purple', linestyle = 'dashed',
                     label = 'RT Modulated (Stimulus Duration*)')
-            line3b,  = axs[idx].plot(
+            line4b,  = axs[idx].plot(
                     cohens_d, 
                     power_output[scale_type]['power_rtmod_1sampt']['Mean RT Duration'], 
                     color='tab:red', linestyle = 'dashed',
@@ -1208,11 +1067,11 @@ def power_plot_group(power_output, fig_dir,
     fig.subplots_adjust(hspace=.5, bottom=0.1)
     fig.tight_layout()
     if show_rt_mod == False:
-        plt.legend(handles=[line1, line2, line3, line4, line5], 
+        plt.legend(handles=[line1, line2, line3, line4, line5, line6], 
               loc='center right', bbox_to_anchor=(1.75, .5), ncol=1)
     else:
         plt.legend(handles=[line1, line1b, line2, line2b, line3, line3b,
-              line4, line5], 
+              line4, line4b, line5, line6], 
               loc='center right', bbox_to_anchor=(1.95, .5), ncol=1)
     if show_rt_mod == True:
         fig_file = f"{fig_dir}/group_power_with_modulated_regressors.pdf"
@@ -1221,6 +1080,89 @@ def power_plot_group(power_output, fig_dir,
     plt.savefig(fig_file,
             format='pdf', transparent=True, pad_inches=.5, bbox_inches='tight')
     if display_plots == True:
+        plt.show()
+
+
+def plot_2sim_sets_lev1_power(output_unmod_beta_power_grin, 
+                              output_rtmod_beta_power_grin,
+                              output_unmod_beta_power_stroop,
+                              output_rtmod_beta_power_stroop,
+                              figdir, display_plot=False):
+    isi_labels = list(output_unmod_beta_power_grin.keys())
+    isi_labels = isi_labels[0:3]
+    nrows_plot = 4
+    ncols_plot = len(isi_labels)
+    fig, axs = plt.subplots(nrows_plot+1, ncols_plot, sharex=True, sharey=True,
+                        figsize=(9.5, 9),
+                        gridspec_kw={"height_ratios": [0.02, 1, 1, 1, 1]})
+    fig.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', which='both', top=False, bottom=False,
+                left=False, right=False)
+    plt.xlabel("Effect size (correlation)", fontsize=20)
+    plt.ylabel("Power (within-subject)", fontsize=20 , labelpad = 20)
+    plt.setp(axs, xlim=(0.05, .3))
+    out_types = [('grin', 'scales_yes', 'Forced Choice\n Scales with RT'),
+             ('grin', 'scales_no', "Forced Choice\n Doesn't scale with RT"),
+             ('stroop', 'scales_yes', 'Stroop\n Scales with RT'),
+             ('stroop', 'scales_no', "Stroop\n Doesn't scale with RT")]
+    for row in range(len(out_types)):
+        for col in range(len(isi_labels)):
+            rt_settings = out_types[row][0]
+            scale_settings = out_types[row][1]
+            plot_label = out_types[row][2]
+            isi_settings = isi_labels[col]
+            out_name_rtmod = f'output_rtmod_beta_power_{rt_settings}'
+            out_name_unmod = f'output_unmod_beta_power_{rt_settings}'
+            rtmod_data = vars()[out_name_rtmod]
+            unmod_data = vars()[out_name_unmod]
+            sim_type = f'dv_{scale_settings}'
+            if scale_settings == 'scales_yes':
+                correlation =\
+                  rtmod_data[isi_settings]['cor_est_scales_yes_filt_yes']
+            else:
+                correlation = \
+                unmod_data[isi_settings]['cor_est_scales_no_filt_yes']
+            line1, = axs[row+1, col].plot(
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Impulse Duration'],
+                    'tab:green', label='Const (Impulse*)')
+
+            line2,  = axs[row+1, col].plot(
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Stimulus Duration (RT=1s)'],
+                    color='tab:orange', label='Const (Stimulus Duration*, RT=1s)')
+
+            line3,  = axs[row+1, col].plot(
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Stimulus Duration'],
+                    color='tab:purple', label='Const (Stimulus Duration*)')
+            line4,  = axs[row+1, col].plot(
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['Mean RT Duration'],
+                    color='tab:red', label='Const (Mean RT Duration*)')
+            line5, = axs[row+1, col].plot(
+                     correlation,
+                     rtmod_data[isi_settings][sim_type]['RT Duration only'],
+                     'tab:blue', label='RT duration')
+            line6,  = axs[row+1, col].plot(
+                    correlation,
+                    unmod_data[isi_settings][sim_type]['No RT effect'],
+                    color='tab:olive', label='Const (Stimulus Duration)')
+            axs[row+1, col].set_title(plot_label)
+            axs[row+1, col].grid(True)
+            axs[row+1, col].set_yticks(np.linspace(0, 1, 5))
+    for i, ax in enumerate(axs.flatten()[:3]):
+        ax.axis("off")
+        ax.set_title(f'ISI=U{isi_labels[i]}', fontweight='bold', fontsize=15)
+    fig.subplots_adjust(hspace=.5, bottom=0.1)
+    fig.tight_layout()
+    plt.legend(handles=[line1, line2, line3, line4, line5, line6],
+           loc='center right', bbox_to_anchor=(1.4, .5),
+           ncol=1)
+    figpath = f"{figdir}/level1_power_fc_stroop.pdf"
+    plt.savefig(figpath, format='pdf', transparent=True, pad_inches=.1,
+            bbox_inches='tight')
+    if display_plot == True:
         plt.show()
 
 
